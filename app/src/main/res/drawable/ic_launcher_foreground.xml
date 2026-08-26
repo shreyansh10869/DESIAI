@@ -4,57 +4,81 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Outer Soft Glow Ring -->
+    <!-- Cyber Cyan Neural Orbital Ring with Glow -->
     <path
-        android:strokeColor="#55FF6F00"
-        android:strokeWidth="1.5"
+        android:strokeColor="#3300E5FF"
+        android:strokeWidth="3.0"
         android:fillColor="#00000000"
-        android:pathData="M54,54m-28,0a28,28 0,1 1,56 0a28,28 0,1 1,-56 0" />
-
-    <!-- Modern Deep Orange Hexagonal / Shield Tech Core -->
+        android:pathData="M54,54m-27,0a27,27 0,1 1,54 0a27,27 0,1 1,-54 0" />
     <path
-        android:fillColor="#FF5722"
-        android:pathData="M54,28 L76,40 L76,68 L54,80 L32,68 L32,40 Z" />
+        android:strokeColor="#8000E5FF"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000"
+        android:pathData="M54,54m-27,0a27,27 0,1 1,54 0a27,27 0,1 1,-54 0" />
 
-    <!-- Inner Deep Amber Facet -->
+    <!-- Neon Saffron Outer Energy Diamond Shield -->
     <path
-        android:fillColor="#FF8F00"
-        android:pathData="M54,32 L72,42 L72,66 L54,76 L36,66 L36,42 Z" />
+        android:fillColor="#FF6F00"
+        android:pathData="M54,28 L78,54 L54,80 L30,54 Z" />
 
-    <!-- Saffron Flame / AI Spark Prism -->
+    <!-- Neon Saffron Inner Glowing Core Facet -->
+    <path
+        android:fillColor="#FF9100"
+        android:pathData="M54,33 L73,54 L54,75 L35,54 Z" />
+
+    <!-- Cyber Cyan Diagonal Cross Neural Beams -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round"
+        android:pathData="M38,38 L70,70 M70,38 L38,70" />
+
+    <!-- Radiant Neon Saffron Four-Point AI Spark -->
     <path
         android:fillColor="#FFA000"
-        android:pathData="M54,36 L68,44 L68,64 L54,72 L40,64 L40,44 Z" />
+        android:pathData="M54,34 Q54,54 34,54 Q54,54 54,74 Q54,54 74,54 Q54,54 54,34 Z" />
 
-    <!-- Dynamic AI Sparkle / Four-Point Intelligence Star (Golden Glow) -->
+    <!-- Cyber Cyan Inner Four-Point Star Core -->
     <path
-        android:fillColor="#FFECB3"
+        android:fillColor="#00E5FF"
         android:pathData="M54,39 Q54,54 39,54 Q54,54 54,69 Q54,54 69,54 Q54,54 54,39 Z" />
 
-    <!-- Center Luminous Core Dot -->
+    <!-- High-Luminance Cyber Cyan / White Core Flare -->
+    <path
+        android:fillColor="#E0F7FA"
+        android:pathData="M54,44 Q54,54 44,54 Q54,54 54,64 Q54,54 64,54 Q54,54 54,44 Z" />
+
+    <!-- Ultra-Bright Luminous Center Dot -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,54m-3.5,0a3.5,3.5 0,1 1,7 0a3.5,3.5 0,1 1,-7 0" />
+        android:pathData="M54,54m-3.0,0a3.0,3.0 0,1 1,6 0a3.0,3.0 0,1 1,-6 0" />
 
-    <!-- Satellite Neural Connectivity Nodes -->
+    <!-- Four Satellite Neural Nodes (Cyber Cyan Glowing Points) -->
     <path
-        android:fillColor="#FFD54F"
-        android:pathData="M54,23m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+        android:fillColor="#00E5FF"
+        android:pathData="M54,27m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
     <path
-        android:fillColor="#FFD54F"
+        android:fillColor="#00E5FF"
         android:pathData="M81,54m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
     <path
-        android:fillColor="#FFD54F"
-        android:pathData="M54,85m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+        android:fillColor="#00E5FF"
+        android:pathData="M54,81m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
     <path
-        android:fillColor="#FFD54F"
+        android:fillColor="#00E5FF"
         android:pathData="M27,54m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
 
-    <!-- Connection Stems -->
+    <!-- Node Center Highlights (White Dots) -->
     <path
-        android:strokeColor="#FFA000"
-        android:strokeWidth="1.5"
-        android:strokeLineCap="round"
-        android:pathData="M54,23 L54,28 M81,54 L76,54 M54,85 L54,80 M27,54 L32,54" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,27m-1.0,0a1.0,1.0 0,1 1,2 0a1.0,1.0 0,1 1,-2 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M81,54m-1.0,0a1.0,1.0 0,1 1,2 0a1.0,1.0 0,1 1,-2 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,81m-1.0,0a1.0,1.0 0,1 1,2 0a1.0,1.0 0,1 1,-2 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M27,54m-1.0,0a1.0,1.0 0,1 1,2 0a1.0,1.0 0,1 1,-2 0" />
 </vector>
 
