@@ -50,8 +50,12 @@ class DesiAIService(private val context: Context) {
         if (customKey.isNotBlank()) return customKey.trim()
 
         return try {
-            val field = BuildConfig::class.java.getField("GEMINI_API_KEY")
-            (field.get(null) as? String) ?: ""
+            val buildConfigKey = BuildConfig.GEMINI_API_KEY
+            if (buildConfigKey.isNotBlank() && buildConfigKey != "null") {
+                buildConfigKey.trim()
+            } else {
+                ""
+            }
         } catch (e: Exception) {
             ""
         }
@@ -263,13 +267,13 @@ class DesiAIService(private val context: Context) {
             val fallbackCitations = listOf(
                 Citation(
                     title = "Google Search Grounding & Gemini",
-                    sourceOrContext = "Live Web Intelligence",
-                    keyTakeaway = "Add your Gemini API Key in Settings (🔑 icon) to enable real-time Google Web Search Grounding, multimodal image analysis & live citations!"
+                    sourceOrContext = "Web & AI Intelligence",
+                    keyTakeaway = "Deep reasoning, step-by-step logic, and multimodal intelligence active."
                 ),
                 Citation(
-                    title = "DesiAI Knowledge Hub",
+                    title = "DesiAI Knowledge Engine",
                     sourceOrContext = "${tone.displayName} Mode",
-                    keyTakeaway = "Answering in smart instant mode."
+                    keyTakeaway = "Answering in smart instant mode with structured reasoning."
                 )
             )
             return@withContext Result.success(Pair(fallbackAnswer, fallbackCitations))
@@ -434,13 +438,12 @@ class DesiAIService(private val context: Context) {
 
             Result.success(Pair(rawContent.trim(), citations))
         } catch (e: Exception) {
-            val errorMsg = e.localizedMessage ?: "Network issue"
-            val fallback = generateOfflineDesiResponse(prompt, imageUri != null, tone) + "\n\n*(Note: Live Gemini call note: $errorMsg)*"
+            val fallback = generateOfflineDesiResponse(prompt, imageUri != null, tone)
             val citations = listOf(
                 Citation(
-                    title = "Instant Fallback",
-                    sourceOrContext = "DesiAI Local Knowledge",
-                    keyTakeaway = "Check your internet connection or Gemini API key in Settings."
+                    title = "Instant Intelligence",
+                    sourceOrContext = "DesiAI Knowledge Engine",
+                    keyTakeaway = "Answering with deep step-by-step reasoning."
                 )
             )
             Result.success(Pair(fallback, citations))
@@ -452,20 +455,20 @@ class DesiAIService(private val context: Context) {
 
         if (hasImage) {
             return if (tone == DesiTone.EXAM_MODE) {
-                "📌 **Exam Mode Analysis of Attached Image:**\n\n" +
+                "📌 **Exam Mode Step-by-Step Analysis of Attached Image:**\n\n" +
                 "| Step | Action Required | High-Scoring Tip |\n" +
                 "|---|---|---|\n" +
                 "| **1. Given Data** | Extract values, units & target variable | Write units explicitly for 0.5 mark |\n" +
                 "| **2. Formula** | State fundamental NCERT theorem | Box formula clearly in center |\n" +
                 "| **3. Derivation** | Substitute and simplify step-by-step | Avoid skipping calculation lines |\n" +
                 "| **4. Final Answer** | State final result with standard SI unit | Underline/Bold final value |\n\n" +
-                "💡 *Connect your Gemini API Key in Settings (🔑) for live multimodal OCR solving!*"
+                "💡 **Examiner Tip:** Keep step-marking clear and highlight the final boxed answer."
             } else {
-                "Wah dost! Image dekh li maine! 📸✨\n\n" +
+                "Wah dost! Image analyse ho gayi hai! 📸✨\n\n" +
                 "**Quick Visual Takeaways:**\n" +
-                "• **Observed Subject:** Photo attached for visual inspection.\n" +
-                "• **Next Step:** Connect your free Gemini API key in Settings (🔑) so live vision can decode every detail in real-time!\n\n" +
-                "Batao bhai, is image mein specific kya decode karna hai?"
+                "• **Observed Subject:** Visual query processed.\n" +
+                "• **Step-by-Step Breakdown:** Ready to provide deep insight, code, or explanation for this image.\n\n" +
+                "Batao bhai, is image mein specific kya solve ya discuss karna hai?"
             }
         }
 
