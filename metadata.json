@@ -1,0 +1,6 @@
+{
+  "name": "DesiAI",
+  "description": "DesiAI is a smart, witty AI companion powered by Gemini that answers questions with Hinglish tone, quick prompt chips, real-time responses, and structured citations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
