@@ -2,36 +2,44 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Auralis AI — Cyber-Desi Luxe Color Palette
-val AuralisObsidianBg = Color(0xFF090A0F)
-val AuralisCapsuleBg = Color(0xFF0F111A).copy(alpha = 0.85f)
-val AuralisGlassCard = Color(0xFF161826).copy(alpha = 0.75f)
-val AuralisSurfaceSolid = Color(0xFF0F111A)
-val AuralisCardSolid = Color(0xFF161826)
-val AuralisHairlineBorder = Color.White.copy(alpha = 0.08f)
+// Minimalist ChatGPT-Style Monochrome Dark Palette
+val ChatDarkBg = Color(0xFF0A0A0A)
+val ChatSurfaceDock = Color(0xFF171717)
+val ChatUserBubble = Color(0xFF1F1F1F)
+val ChatSubtleBorder = Color(0xFF262626)
+val ChatCodeBg = Color(0xFF141414)
 
-val AuralisCyan = Color(0xFF00F2FE)
-val AuralisCyanGlow = Color(0xFF00F2FE).copy(alpha = 0.28f)
-val AuralisPurple = Color(0xFF9B51E0)
-val AuralisPurpleGlow = Color(0xFF9B51E0).copy(alpha = 0.30f)
+val ChatTextPrimary = Color(0xFFECECEC)
+val ChatTextSecondary = Color(0xFF9B9B9B)
+val ChatTextMuted = Color(0xFF6E6E6E)
+val ChatAccentWhite = Color(0xFFFFFFFF)
 
-// Mapped legacy tokens to Cyber-Desi Luxe palette for seamless markdown & component styling
-val DesiOrangePrimary = Color(0xFF00F2FE)
-val DesiOrangeLight = Color(0xFF66F7FF)
-val DesiOrangeDark = Color(0xFF00B4D8)
-val DesiOrangeContainer = Color(0xFF0A2229)
+// Compatibility aliases mapped to minimalist palette
+val AuralisObsidianBg = ChatDarkBg
+val AuralisCapsuleBg = ChatSurfaceDock
+val AuralisGlassCard = ChatUserBubble
+val AuralisSurfaceSolid = ChatSurfaceDock
+val AuralisCardSolid = ChatUserBubble
+val AuralisHairlineBorder = ChatSubtleBorder
+val AuralisCyan = ChatAccentWhite
+val AuralisPurple = Color(0xFFD4D4D4)
 
-val DesiAmberSecondary = Color(0xFF9B51E0)
-val DesiAmberContainer = Color(0xFF231436)
+val DesiOrangePrimary = ChatAccentWhite
+val DesiOrangeLight = Color(0xFFE5E5E5)
+val DesiOrangeDark = Color(0xFFB3B3B3)
+val DesiOrangeContainer = ChatUserBubble
 
-val DesiDarkBg = Color(0xFF090A0F)
-val DesiDarkSurface = Color(0xFF0F111A)
-val DesiDarkCard = Color(0xFF161826)
-val DesiDarkBorder = Color(0x14FFFFFF) // Color.White.copy(alpha = 0.08f)
+val DesiAmberSecondary = Color(0xFFD4D4D4)
+val DesiAmberContainer = ChatSurfaceDock
 
-val DesiTextPrimary = Color(0xFFF5F7FA)
-val DesiTextSecondary = Color(0xFFA6B0C3)
-val DesiTextMuted = Color(0xFF697386)
+val DesiDarkBg = ChatDarkBg
+val DesiDarkSurface = ChatSurfaceDock
+val DesiDarkCard = ChatUserBubble
+val DesiDarkBorder = ChatSubtleBorder
+
+val DesiTextPrimary = ChatTextPrimary
+val DesiTextSecondary = ChatTextSecondary
+val DesiTextMuted = ChatTextMuted
 
 val DesiGreenSuccess = Color(0xFF10B981)
-val DesiTealAccent = Color(0xFF00F2FE)
+val DesiTealAccent = ChatAccentWhite

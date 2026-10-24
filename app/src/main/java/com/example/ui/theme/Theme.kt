@@ -5,23 +5,23 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val AuralisDarkColorScheme = darkColorScheme(
-    primary = AuralisCyan,
-    onPrimary = Color(0xFF090A0F),
-    primaryContainer = DesiOrangeContainer,
-    onPrimaryContainer = DesiOrangeLight,
-    secondary = AuralisPurple,
-    onSecondary = Color.White,
-    secondaryContainer = DesiAmberContainer,
-    onSecondaryContainer = AuralisPurple,
-    tertiary = DesiTealAccent,
-    background = AuralisObsidianBg,
-    onBackground = DesiTextPrimary,
-    surface = AuralisSurfaceSolid,
-    onSurface = DesiTextPrimary,
-    surfaceVariant = AuralisCardSolid,
-    onSurfaceVariant = DesiTextSecondary,
-    outline = AuralisHairlineBorder
+private val MinimalistDarkColorScheme = darkColorScheme(
+    primary = ChatAccentWhite,
+    onPrimary = ChatDarkBg,
+    primaryContainer = ChatUserBubble,
+    onPrimaryContainer = ChatTextPrimary,
+    secondary = ChatTextSecondary,
+    onSecondary = ChatDarkBg,
+    secondaryContainer = ChatSurfaceDock,
+    onSecondaryContainer = ChatTextPrimary,
+    tertiary = ChatTextPrimary,
+    background = ChatDarkBg,
+    onBackground = ChatTextPrimary,
+    surface = ChatSurfaceDock,
+    onSurface = ChatTextPrimary,
+    surfaceVariant = ChatUserBubble,
+    onSurfaceVariant = ChatTextSecondary,
+    outline = ChatSubtleBorder
 )
 
 @Composable
@@ -29,7 +29,7 @@ fun AuralisAITheme(
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
-        colorScheme = AuralisDarkColorScheme,
+        colorScheme = MinimalistDarkColorScheme,
         typography = Typography,
         content = content
     )
