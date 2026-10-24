@@ -4,81 +4,55 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Cyber Cyan Neural Orbital Ring with Glow -->
+    <!-- Outer Auralis Cyan & Purple Dual Aura Rings -->
     <path
-        android:strokeColor="#3300E5FF"
-        android:strokeWidth="3.0"
+        android:strokeColor="#4000F2FE"
+        android:strokeWidth="3.2"
         android:fillColor="#00000000"
-        android:pathData="M54,54m-27,0a27,27 0,1 1,54 0a27,27 0,1 1,-54 0" />
+        android:pathData="M54,54m-29,0a29,29 0,1 1,58 0a29,29 0,1 1,-58 0" />
     <path
-        android:strokeColor="#8000E5FF"
-        android:strokeWidth="1.2"
+        android:strokeColor="#809B51E0"
+        android:strokeWidth="1.6"
         android:fillColor="#00000000"
-        android:pathData="M54,54m-27,0a27,27 0,1 1,54 0a27,27 0,1 1,-54 0" />
+        android:pathData="M54,54m-25,0a25,25 0,1 1,50 0a25,25 0,1 1,-50 0" />
 
-    <!-- Neon Saffron Outer Energy Diamond Shield -->
+    <!-- Neon Purple Reasoning Octagon Halo -->
     <path
-        android:fillColor="#FF6F00"
-        android:pathData="M54,28 L78,54 L54,80 L30,54 Z" />
+        android:fillColor="#339B51E0"
+        android:pathData="M54,26 L74,34 L82,54 L74,74 L54,82 L34,74 L26,54 L34,34 Z" />
 
-    <!-- Neon Saffron Inner Glowing Core Facet -->
+    <!-- Sculpted Auralis 'A' Outer Cyber-Cyan Apex -->
     <path
-        android:fillColor="#FF9100"
-        android:pathData="M54,33 L73,54 L54,75 L35,54 Z" />
+        android:fillColor="#00F2FE"
+        android:pathData="M54,28 L73,74 L64.5,74 L59.5,61.5 L48.5,61.5 L43.5,74 L35,74 Z" />
 
-    <!-- Cyber Cyan Diagonal Cross Neural Beams -->
+    <!-- Inner Obsidian Cutout of 'A' -->
     <path
-        android:strokeColor="#00E5FF"
-        android:strokeWidth="2.0"
-        android:strokeLineCap="round"
-        android:pathData="M38,38 L70,70 M70,38 L38,70" />
+        android:fillColor="#0F111A"
+        android:pathData="M54,40.5 L49.5,53.5 L58.5,53.5 Z" />
 
-    <!-- Radiant Neon Saffron Four-Point AI Spark -->
+    <!-- Neon Purple Neural Crossbar Accent -->
     <path
-        android:fillColor="#FFA000"
-        android:pathData="M54,34 Q54,54 34,54 Q54,54 54,74 Q54,54 74,54 Q54,54 54,34 Z" />
+        android:fillColor="#9B51E0"
+        android:pathData="M45,56 L63,56 L60.5,61.5 L47.5,61.5 Z" />
 
-    <!-- Cyber Cyan Inner Four-Point Star Core -->
-    <path
-        android:fillColor="#00E5FF"
-        android:pathData="M54,39 Q54,54 39,54 Q54,54 54,69 Q54,54 69,54 Q54,54 54,39 Z" />
-
-    <!-- High-Luminance Cyber Cyan / White Core Flare -->
-    <path
-        android:fillColor="#E0F7FA"
-        android:pathData="M54,44 Q54,54 44,54 Q54,54 54,64 Q54,54 64,54 Q54,54 54,44 Z" />
-
-    <!-- Ultra-Bright Luminous Center Dot -->
+    <!-- Radiant Four-Point Auralis Core Star at Apex -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,54m-3.0,0a3.0,3.0 0,1 1,6 0a3.0,3.0 0,1 1,-6 0" />
+        android:pathData="M54,22 Q54,30 46,30 Q54,30 54,38 Q54,30 62,30 Q54,30 54,22 Z" />
 
-    <!-- Four Satellite Neural Nodes (Cyber Cyan Glowing Points) -->
+    <!-- Four Orbital Neural Pearl Nodes -->
     <path
-        android:fillColor="#00E5FF"
-        android:pathData="M54,27m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+        android:fillColor="#00F2FE"
+        android:pathData="M54,25m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
     <path
-        android:fillColor="#00E5FF"
-        android:pathData="M81,54m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+        android:fillColor="#9B51E0"
+        android:pathData="M83,54m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
     <path
-        android:fillColor="#00E5FF"
-        android:pathData="M54,81m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
+        android:fillColor="#00F2FE"
+        android:pathData="M54,83m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
     <path
-        android:fillColor="#00E5FF"
-        android:pathData="M27,54m-2.5,0a2.5,2.5 0,1 1,5 0a2.5,2.5 0,1 1,-5 0" />
-
-    <!-- Node Center Highlights (White Dots) -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,27m-1.0,0a1.0,1.0 0,1 1,2 0a1.0,1.0 0,1 1,-2 0" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M81,54m-1.0,0a1.0,1.0 0,1 1,2 0a1.0,1.0 0,1 1,-2 0" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,81m-1.0,0a1.0,1.0 0,1 1,2 0a1.0,1.0 0,1 1,-2 0" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M27,54m-1.0,0a1.0,1.0 0,1 1,2 0a1.0,1.0 0,1 1,-2 0" />
+        android:fillColor="#9B51E0"
+        android:pathData="M25,54m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
 </vector>
 

@@ -5,32 +5,46 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val DesiDarkColorScheme = darkColorScheme(
-    primary = DesiOrangePrimary,
-    onPrimary = Color.White,
+private val AuralisDarkColorScheme = darkColorScheme(
+    primary = AuralisCyan,
+    onPrimary = Color(0xFF090A0F),
     primaryContainer = DesiOrangeContainer,
     onPrimaryContainer = DesiOrangeLight,
-    secondary = DesiAmberSecondary,
-    onSecondary = Color.Black,
+    secondary = AuralisPurple,
+    onSecondary = Color.White,
     secondaryContainer = DesiAmberContainer,
-    onSecondaryContainer = DesiAmberSecondary,
+    onSecondaryContainer = AuralisPurple,
     tertiary = DesiTealAccent,
-    background = DesiDarkBg,
+    background = AuralisObsidianBg,
     onBackground = DesiTextPrimary,
-    surface = DesiDarkSurface,
+    surface = AuralisSurfaceSolid,
     onSurface = DesiTextPrimary,
-    surfaceVariant = DesiDarkCard,
+    surfaceVariant = AuralisCardSolid,
     onSurfaceVariant = DesiTextSecondary,
-    outline = DesiDarkBorder
+    outline = AuralisHairlineBorder
 )
+
+@Composable
+fun AuralisAITheme(
+    content: @Composable () -> Unit
+) {
+    MaterialTheme(
+        colorScheme = AuralisDarkColorScheme,
+        typography = Typography,
+        content = content
+    )
+}
 
 @Composable
 fun DesiAITheme(
     content: @Composable () -> Unit
 ) {
-    MaterialTheme(
-        colorScheme = DesiDarkColorScheme,
-        typography = Typography,
-        content = content
-    )
+    AuralisAITheme(content = content)
+}
+
+@Composable
+fun MyApplicationTheme(
+    content: @Composable () -> Unit
+) {
+    AuralisAITheme(content = content)
 }

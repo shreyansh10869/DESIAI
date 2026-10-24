@@ -38,7 +38,8 @@ data class DesiMessage(
     val isLoading: Boolean = false,
     val error: String? = null,
     val imageUriString: String? = null,
-    val tone: DesiTone = DesiTone.DESI_FRIEND
+    val tone: DesiTone = DesiTone.DESI_FRIEND,
+    val engineMode: AiEngineMode = AiEngineMode.FAST_MODE
 )
 
 class DesiAIService(private val context: Context) {

@@ -3,24 +3,24 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Obsidian Black Canvas (#0F0F14) -->
+    <!-- Deep Obsidian Space Canvas (#090A0F) -->
     <path
-        android:fillColor="#0F0F14"
+        android:fillColor="#090A0F"
         android:pathData="M0,0h108v108h-108z" />
 
-    <!-- Ambient Dark Nebula Glow -->
+    <!-- Ambient Cyber-Desi Outer Nebula Ring -->
     <path
-        android:fillColor="#151520"
-        android:pathData="M54,54m-48,0a48,48 0,1 1,96 0a48,48 0,1 1,-96 0" />
+        android:fillColor="#101322"
+        android:pathData="M54,54m-46,0a46,46 0,1 1,92 0a46,46 0,1 1,-92 0" />
 
-    <!-- Subtle Deep Obsidian Squircle Layer -->
+    <!-- Frosted Obsidian Squircle Vault -->
     <path
-        android:fillColor="#1A1926"
-        android:pathData="M54,20 C74,20 88,34 88,54 C88,74 74,88 54,88 C34,88 20,74 20,54 C20,34 34,20 54,20 Z" />
+        android:fillColor="#161826"
+        android:pathData="M54,18 C76,18 90,32 90,54 C90,76 76,90 54,90 C32,90 18,76 18,54 C18,32 32,18 54,18 Z" />
 
-    <!-- Ambient Neural Core Depth Aura -->
+    <!-- Deep Think Purple Inner Aura -->
     <path
-        android:fillColor="#1F1D2B"
-        android:pathData="M54,54m-26,0a26,26 0,1 1,52 0a26,26 0,1 1,-52 0" />
+        android:fillColor="#1D1632"
+        android:pathData="M54,54m-28,0a28,28 0,1 1,56 0a28,28 0,1 1,-56 0" />
 </vector>
 

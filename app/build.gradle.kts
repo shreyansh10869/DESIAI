@@ -13,9 +13,18 @@ android {
     minSdk = 24
     targetSdk = 36
     versionCode = 1
-    versionName = "1.0"
+    versionName = "2.0-Auralis"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val geminiKey = (System.getenv("GEMINI_API_KEY") ?: "").replace("\"", "\\\"")
+    buildConfigField("String", "GEMINI_API_KEY", "\"$geminiKey\"")
+
+    val groqKey = (System.getenv("GROQ_API_KEY") ?: "").replace("\"", "\\\"")
+    buildConfigField("String", "GROQ_API_KEY", "\"$groqKey\"")
+
+    val longcatKey = (System.getenv("LONGCAT_API_KEY") ?: "").replace("\"", "\\\"")
+    buildConfigField("String", "LONGCAT_API_KEY", "\"$longcatKey\"")
   }
 
   signingConfigs {
@@ -26,12 +35,6 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
   }
 
   buildTypes {
@@ -39,13 +42,13 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.findByName("release")
+      val releaseKeystore = file(System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks")
+      if (releaseKeystore.exists()) {
+        signingConfig = signingConfigs.findByName("release")
+      }
     }
     debug {
-      val customKeystore = file("${rootDir}/debug.keystore")
-      if (customKeystore.exists()) {
-        signingConfig = signingConfigs.getByName("debugConfig")
-      }
+      // Uses standard Android Gradle Plugin default debug signing config for reliable CI/CD builds
     }
   }
   compileOptions {
@@ -66,9 +69,12 @@ android {
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
 secrets {
-  propertiesFileName = ".env"
-  defaultPropertiesFileName = ".env.example"
+  propertiesFileName = if (rootProject.file(".env").exists()) ".env" else "secrets.properties"
+  defaultPropertiesFileName = if (rootProject.file(".env.example").exists()) ".env.example" else "local.defaults.properties"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.add("GEMINI_API_KEY")
+  ignoreList.add("GROQ_API_KEY")
+  ignoreList.add("LONGCAT_API_KEY")
 }
 
 dependencies {
