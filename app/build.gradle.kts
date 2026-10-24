@@ -48,7 +48,7 @@ android {
       }
     }
     debug {
-      // Uses standard Android Gradle Plugin default debug signing config for reliable CI/CD builds
+      signingConfig = signingConfigs.getByName("debug")
     }
   }
   compileOptions {
