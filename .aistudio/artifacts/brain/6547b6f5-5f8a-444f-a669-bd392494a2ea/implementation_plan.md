@@ -1,96 +1,74 @@
-# Auralis AI — Minimalist ChatGPT-Style Redesign & Real API Streaming Plan
+# Auralis AI — SSE Keep-Alive Heartbeat, `models_config.json` Dynamic Routing & Instant First-Token Streaming Plan
 
-Redesign **Auralis AI** into a distraction-free, pure dark (`#0A0A0A`) ChatGPT-style interface and eliminate all hardcoded dummy templates, static comparison tables, and citation boxes so the app exclusively streams real responses from the configured AI engines.
-
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> Please review the following architectural and UX decisions before execution:
-
-- **Eliminate All Dummy Fallbacks & Boilerplate Cards**: All static offline mock responses (`buildLocalAuralisResponse`), preset Markdown tables (`Core Insight` / `Stage` tables), and `Auralis Verified Sources` boxes will be removed. If an API key is missing or a network call fails, Auralis AI will render a single, clean one-line status message (e.g., `"Please add your Gemini or Groq API key in Settings to start chatting."` or `"Connection error: Unable to reach AI engine."`).
-- **Minimalist ChatGPT-Style Layout**: Pure dark `#0A0A0A` canvas, a single-row minimalist top bar (`Auralis AI` title + compact `Fast` / `Deep Think` pill selector + Settings icon), unboxed left-aligned AI responses, subtle right-aligned user message bubbles (`#1E1E1E`), and a `RoundedCornerShape(26.dp)` floating bottom input bar with `+`, `Message` placeholder, and dynamic `Mic` / `Send` button.
+## Root Cause of Slow `"hi"` / Stuck `"..."` on Preview
+1. **Unnecessary Thinking Delay on Fallback Model**: Passing `thinking_config: { thinking_level: "medium" }` to `gemini-3.1-flash-lite` caused the model to generate 175–600+ internal thought tokens before emitting the first visible word, making even a simple `"hi"` wait several seconds on the `...` dots.
+2. **Repeated 404 Round-Trips on Primary Endpoint**: Every chat turn waited for a full network round-trip to `gemini-3.8-flash` before failing over to `gemini-3.1-flash-lite`. Caching the active endpoint after a 404 or using sub-400ms fast failover eliminates this delay.
+3. **Idle Proxy Connection Drops**: Without a periodic `:\n\n` SSE comment heartbeat and `Cache-Control: no-cache, no-transform`, reverse proxies can buffer or drop long-running streams.
 
 ---
 
-## 1. Overview & Core Concept
-
-- **What It Does**: Provides a fast, lightweight, clutter-free AI chat experience on Android powered by real-time API streaming from Gemini (`gemini-3.1-flash-lite-preview` / `gemini-2.5-flash`) in **Fast** mode and LongCat / Groq (`openai/gpt-oss-120b`) / Gemini in **Deep Think** mode.
-- **Target Audience / Persona**: Users who want a clean, responsive, ChatGPT-grade mobile assistant without visual noise, artificial borders, or canned mock replies.
-- **Key Value**: Instant readability, authentic live AI generation, and ergonomic one-handed mobile interaction.
-
----
-
-## 2. User Experience & Visual Design
-
-- **Key User Flows**:
-  1. **Zero-State Launch**: Opens onto a clean `#0A0A0A` canvas with a minimal centered greeting (`"What can I help with?"`) and optional one-tap starter prompts.
-  2. **Model Switching & Settings**: Top bar allows one-tap switching between `Fast` and `Deep Think` modes or opening the lightweight API key configuration dialog (plus a clean new-chat reset action).
-  3. **Prompting & Streaming**: Tapping the bottom `RoundedCornerShape(26.dp)` pill lets the user attach an image via `+`, dictate via `Mic`, or type a message and tap `Send`. While waiting for the first token, a small capsule displays 3 subtle pulsing dots (no text labels). As tokens arrive on `Dispatchers.Main`, the dots transition into clean, left-aligned streaming text.
-- **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Ultra-minimalist monochrome dark mode inspired by the official ChatGPT mobile app.
-  - *Color Palette & Mood*:
-    - Dominant Canvas (`60%`): Pure Dark `#0A0A0A` (`Color(0xFF0A0A0A)`).
-    - Structural Surfaces (`30%`): Subtle elevated dark gray `#171717` (`Color(0xFF171717)`) for the input dock and `#1F1F1F` (`Color(0xFF1F1F1F)`) for user message bubbles, paired with `#ECECEC` primary text and `#8E8E93` muted secondary text.
-    - Accent Budget (`10%`): Crisp white `#FFFFFF` primary action button with dark `#0A0A0A` icon contrast.
-  - *Typography & Hierarchy*: Clean system sans-serif with `15.5sp` body prose (`23sp` line height) for effortless reading, bold section headers, and dark `#141414` monospace blocks for code snippets—with all artificial table wrappers removed.
-  - *Component Styling & Layout*: Minimum `44dp × 44dp` touch hitboxes, generous vertical spacing between conversation turns, and sticky header + input bar occupying under `15%` of the viewport height.
-- **Interactive Feedback & Motion**:
-  - **Typing Indicator**: 3 subtle pulsing dots inside a compact dark capsule (`#171717`) with zero text labels.
-  - **Send / Mic Transition**: `150ms` smooth crossfade between `Mic` (when input is empty) and upward/forward `Send` arrow (when text or image is present).
+## 1. SSE Heartbeat / Keep-Alive & Dev Proxy Fix (`server.mjs`)
+- On `POST /api/chat`:
+  - Immediately write SSE headers:
+    - `'Content-Type': 'text/event-stream'`
+    - `'Cache-Control': 'no-cache, no-transform'`
+    - `'Connection': 'keep-alive'`
+  - Disable socket/request timeouts:
+    - `req.setTimeout(0);`
+    - `res.setTimeout(0);`
+  - Emit an active SSE comment heartbeat every `5000ms` (plus an initial `:\n\n` flush right on connect so the proxy establishes the stream immediately):
+    ```js
+    const keepAliveTimer = setInterval(() => {
+      if (!res.writableEnded) res.write(':\n\n');
+    }, 5000);
+    req.on('close', () => clearInterval(keepAliveTimer));
+    ```
+  - Clear `keepAliveTimer` before `res.end()`.
+  - Pipe upstream SSE chunks directly to `res` via `res.write` without `await gResp.text()` buffering.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Strict Removal of Offline Mock Templates**
-  - *Chosen Approach*: Remove all canned fallback strings and hardcoded Markdown tables. Return real API output or a concise one-line error string.
-  - *Why*: Canned responses mislead users into thinking the model generated boilerplate tables and obscure API key configuration issues.
-  - *Alternatives Considered*: Keeping a shorter offline demo response (rejected because the user explicitly requested zero dummy templates).
-- **Decision 2: Unboxed Left-Aligned AI Prose**
-  - *Chosen Approach*: Render AI responses directly on the `#0A0A0A` background without card borders, colored outlines, or citation boxes, keeping subtle inline action icons (Copy, Share, Speak) below completed responses.
-  - *Why*: Matches the official ChatGPT reading experience and maximizes horizontal screen real estate on mobile viewports.
+## 2. Config-Driven Dynamic Deep Think Chain & Fast Models (`assets/models_config.json` & `AiEngineService.kt`)
+- Create `/assets/models_config.json` and `/app/src/main/assets/models_config.json`:
+  ```json
+  {
+    "fast_primary": "gemini-3.8-flash",
+    "fast_fallback": "gemini-3.1-flash-lite",
+    "deep_think_chain": [
+      "openai/gpt-oss-120b",
+      "qwen/qwen3.8-27b",
+      "llama-3.3-70b-versatile"
+    ],
+    "deep_think_gemini_fallback": "gemini-3.8-flash"
+  }
+  ```
+- **Fast Mode**:
+  - Primary: `gemini-3.8-flash` (`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse`) with `{ "thinking_config": { "thinking_level": "medium" } }`.
+  - Fallback: `gemini-3.1-flash-lite` (`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse`) configured for instant token emission (`<400ms` time-to-first-token) so simple prompts like `"hi"` answer immediately.
+- **Deep Think Engine**:
+  - Sequentially attempt models in `deep_think_chain` (`openai/gpt-oss-120b`, `qwen/qwen3.8-27b`, `llama-3.3-70b-versatile`) via Groq API (`https://api.groq.com/openai/v1/chat/completions`), and if unavailable or `groqKey` is blank, fall back to `deep_think_gemini_fallback` (`gemini-3.8-flash` -> `gemini-3.1-flash-lite`) with step-by-step reasoning instructions.
 
 ---
 
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
+## 3. Pre-Configured Keys (Zero UI Key Popups)
+- Resolve `geminiKey` and `groqKey` with strict `BuildConfig` priority in `AiEngineService.kt`:
+  ```kotlin
+  val geminiKey = BuildConfig.GEMINI_API_KEY.takeIf { it.isNotBlank() }
+      ?: prefs.getString("gemini_api_key", null)?.trim()?.takeIf { it.isNotBlank() }
+      ?: System.getenv("GEMINI_API_KEY") ?: ""
+  val groqKey = BuildConfig.GROQ_API_KEY.takeIf { it.isNotBlank() }
+      ?: prefs.getString("groq_api_key", null)?.trim()?.takeIf { it.isNotBlank() }
+      ?: System.getenv("GROQ_API_KEY") ?: ""
+  ```
+- Authenticate Gemini requests strictly via HTTP headers `'x-goog-api-key': geminiKey` and `'Content-Type': 'application/json'`.
 
-- **Architecture & Component Diagram**:
+---
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                         MainActivity UI                           │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │ Minimal Top Bar: Title | [Fast / Deep Think] Pill | Settings│  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                 │                                 │
-│  ┌──────────────────────────────▼──────────────────────────────┐  │
-│  │                     Chat Conversation                       │  │
-│  │  • Empty State: Minimal centered "What can I help with?"    │  │
-│  │  • User Turn: Subtle right-aligned bubble (#1F1F1F)         │  │
-│  │  • AI Turn: Left-aligned plain formatted text (no border)   │  │
-│  │  • Thinking State: 3 minimal pulsing dots capsule           │  │
-│  └──────────────────────────────┬──────────────────────────────┘  │
-│                                 │                                 │
-│  ┌──────────────────────────────▼──────────────────────────────┐  │
-│  │    Floating Input Bar (RoundedCornerShape(26.dp), #171717)  │  │
-│  │    [+] Attach Image  |  "Message" Input  |  [Mic / Send]    │  │
-│  └──────────────────────────────┬──────────────────────────────┘  │
-└─────────────────────────────────┼─────────────────────────────────┘
-                                  │ Dispatchers.Main (try / finally)
-┌─────────────────────────────────▼─────────────────────────────────┐
-│                         AiEngineService                           │
-│  • Fast Mode  ──► Gemini API (gemini-3.1-flash-lite / 2.5-flash)  │
-│  • Deep Think ──► Primary Reasoning (3.5s timeout)                │
-│                     └─► Fallback: Groq (openai/gpt-oss-120b)      │
-│                     └─► Fallback: Gemini API                      │
-│  • CJK Regex Sanitizer + Clean 1-Line Error on Missing Key/Failure│
-└───────────────────────────────────────────────────────────────────┘
-```
+## 4. Multimodal Image Vision & Real-Time Streaming
+- Downscale attached images (max `1024px`), compress to Base64 `inlineData` (`image/jpeg`), and pass directly into the Gemini `contents` payload with strict role alternation.
+- Stream SSE lines directly onto `Dispatchers.Main`, recycle bitmaps, close streams, and reset `isSynthesizing = false` in `finally` blocks.
 
-- **Data Model & State**:
-  - `ChatMessage` (`DesiMessage`): Holds `id`, `text`, `isUser`, `isLoading`, `error`, `imageUriString`, and `engineMode` (citations list unused/empty).
-  - Persistent history stored in `SharedPreferences` (`auralis_ai_prefs`) with automatic sanitization.
-- **Interactive Component & State Mapping**:
-  - **Model Selector Pill**: Toggles `selectedEngineMode` between `FAST_MODE` and `DEEP_THINK` and persists selection.
-  - **Settings Dialog**: Allows viewing/saving Gemini, Groq, and LongCat API keys and clearing conversation history.
-  - **Streaming Lifecycle**: `sendMessage` appends the user message and an empty loading placeholder (`isLoading = true, text = ""`), streams sanitized chunks onto `Dispatchers.Main`, replaces the placeholder with a concise one-line message on error, and guarantees `isSynthesizing = false` inside `finally` on `Dispatchers.Main`.
+---
+
+## 5. Minimalist `#0A0A0A` ChatGPT Interface (`MainActivity.kt` & `server.mjs`)
+- Solid `#0A0A0A` obsidian background, single-row header with title, `Fast` / `Deep Think` pill switch, and Settings gear icon (`Icons.Filled.Settings`), `#1F1F1F` user bubbles, borderless AI prose, 3 pulsing dots inside a `#171717` capsule while awaiting the first token, and `RoundedCornerShape(26.dp)` floating input bar.

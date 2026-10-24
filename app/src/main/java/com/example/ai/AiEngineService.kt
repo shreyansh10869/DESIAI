@@ -7,7 +7,6 @@ import android.net.Uri
 import android.util.Base64
 import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -16,7 +15,6 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
-import java.net.SocketTimeoutException
 import java.net.URL
 
 enum class AiEngineMode(val displayName: String, val badgeLabel: String) {
@@ -24,57 +22,100 @@ enum class AiEngineMode(val displayName: String, val badgeLabel: String) {
     DEEP_THINK("Deep Think", "Deep Think")
 }
 
+data class ModelsConfig(
+    val fastPrimary: String = "gemini-3.8-flash",
+    val fastFallback: String = "gemini-3.1-flash-lite",
+    val deepThinkChain: List<String> = listOf(
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
+        "llama-3.3-70b-versatile"
+    ),
+    val deepThinkGeminiFallback: String = "gemini-3.8-flash"
+)
+
 class AiEngineService(private val context: Context) {
+
+    companion object {
+        const val FAST_PRIMARY_MODEL = "gemini-3.8-flash"
+        const val FAST_FALLBACK_MODEL = "gemini-3.1-flash-lite"
+        const val DEEP_THINK_GROQ_MODEL = "llama-3.3-70b-versatile"
+
+        const val GEMINI_PRIMARY_SSE_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"
+        const val GEMINI_FALLBACK_SSE_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
+        const val GROQ_COMPLETIONS_ENDPOINT =
+            "https://api.groq.com/openai/v1/chat/completions"
+
+        private val CLOUD_PROXY_ENDPOINTS = listOf(
+            "https://ais-pre-qamaf3efozgtsy6v3vnyw3-886284290712.asia-southeast1.run.app/api/chat",
+            "https://ais-dev-qamaf3efozgtsy6v3vnyw3-886284290712.asia-southeast1.run.app/api/chat"
+        )
+    }
 
     private val prefs = context.getSharedPreferences("auralis_ai_prefs", Context.MODE_PRIVATE)
     private val legacyPrefs = context.getSharedPreferences("desiai_prefs", Context.MODE_PRIVATE)
+
+    val modelsConfig: ModelsConfig by lazy { loadModelsConfigFromAssets() }
+
+    private fun loadModelsConfigFromAssets(): ModelsConfig {
+        return try {
+            val jsonText = context.assets.open("models_config.json").bufferedReader().use { it.readText() }
+            val obj = JSONObject(jsonText)
+            val chainArr = obj.optJSONArray("deep_think_chain")
+            val chainList = mutableListOf<String>()
+            if (chainArr != null) {
+                for (i in 0 until chainArr.length()) {
+                    val item = chainArr.optString(i, "").trim()
+                    if (item.isNotEmpty()) chainList.add(item)
+                }
+            }
+            ModelsConfig(
+                fastPrimary = obj.optString("fast_primary", FAST_PRIMARY_MODEL).ifBlank { FAST_PRIMARY_MODEL },
+                fastFallback = obj.optString("fast_fallback", FAST_FALLBACK_MODEL).ifBlank { FAST_FALLBACK_MODEL },
+                deepThinkChain = if (chainList.isNotEmpty()) chainList else listOf(
+                    "openai/gpt-oss-120b",
+                    "qwen/qwen3.8-27b",
+                    "llama-3.3-70b-versatile"
+                ),
+                deepThinkGeminiFallback = obj.optString("deep_think_gemini_fallback", FAST_PRIMARY_MODEL)
+                    .ifBlank { FAST_PRIMARY_MODEL }
+            )
+        } catch (_: Exception) {
+            ModelsConfig()
+        }
+    }
 
     fun sanitizeStreamChunk(chunk: String): String {
         return chunk.replace("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF]".toRegex(), "")
     }
 
     fun getGeminiApiKey(): String {
-        val customKey = prefs.getString("custom_api_key", "")?.trim().orEmpty()
-        if (customKey.isNotBlank()) return customKey
-        val legacyKey = legacyPrefs.getString("custom_api_key", "")?.trim().orEmpty()
-        if (legacyKey.isNotBlank()) return legacyKey
-
-        return try {
-            val buildKey = BuildConfig.GEMINI_API_KEY
-            if (buildKey.isNotBlank() && buildKey != "null") buildKey.trim() else ""
-        } catch (e: Exception) {
-            ""
-        }
+        val geminiKey = BuildConfig.GEMINI_API_KEY.takeIf { it.isNotBlank() }
+            ?: prefs.getString("gemini_api_key", null)?.trim()?.takeIf { it.isNotBlank() }
+            ?: System.getenv("GEMINI_API_KEY") ?: ""
+        return geminiKey.trim()
     }
 
     fun getGroqApiKey(): String {
-        val customGroq = prefs.getString("groq_api_key", "")?.trim().orEmpty()
-        if (customGroq.isNotBlank()) return customGroq
-        return try {
-            val buildKey = BuildConfig.GROQ_API_KEY
-            if (buildKey.isNotBlank() && buildKey != "null") buildKey.trim() else ""
-        } catch (e: Exception) {
-            ""
-        }
-    }
-
-    fun getLongCatApiKey(): String {
-        val customLongCat = prefs.getString("longcat_api_key", "")?.trim().orEmpty()
-        if (customLongCat.isNotBlank()) return customLongCat
-        return try {
-            val buildKey = BuildConfig.LONGCAT_API_KEY
-            if (buildKey.isNotBlank() && buildKey != "null") buildKey.trim() else ""
-        } catch (e: Exception) {
-            ""
-        }
+        val groqKey = BuildConfig.GROQ_API_KEY.takeIf { it.isNotBlank() }
+            ?: prefs.getString("groq_api_key", null)?.trim()?.takeIf { it.isNotBlank() }
+            ?: System.getenv("GROQ_API_KEY") ?: ""
+        return groqKey.trim()
     }
 
     fun saveApiKey(geminiKey: String, groqKey: String = getGroqApiKey()) {
+        val trimmedGemini = geminiKey.trim()
+        val trimmedGroq = groqKey.trim()
         prefs.edit()
-            .putString("custom_api_key", geminiKey.trim())
-            .putString("groq_api_key", groqKey.trim())
+            .putString("gemini_api_key", trimmedGemini)
+            .putString("custom_api_key", trimmedGemini)
+            .putString("groq_api_key", trimmedGroq)
             .apply()
-        legacyPrefs.edit().putString("custom_api_key", geminiKey.trim()).apply()
+        legacyPrefs.edit()
+            .putString("gemini_api_key", trimmedGemini)
+            .putString("custom_api_key", trimmedGemini)
+            .apply()
     }
 
     fun getSavedEngineMode(): AiEngineMode {
@@ -133,11 +174,14 @@ class AiEngineService(private val context: Context) {
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
                 val text = sanitizeStreamChunk(obj.optString("text", ""))
-                // Filter out any legacy cached dummy template responses from earlier versions
                 if (text.contains("Core Insight | Next Step") ||
                     text.contains("Auralis Fast Synthesis") ||
                     text.contains("Auralis Deep Think Synthesis") ||
-                    text.contains("Namaste dost!")
+                    text.contains("Auralis Verified Sources") ||
+                    text.contains("Namaste dost!") ||
+                    text.contains("Please check your Gemini API key") ||
+                    text.contains("Please add your Gemini API key") ||
+                    text.contains("Connection interrupted. Please try")
                 ) {
                     continue
                 }
@@ -171,16 +215,25 @@ class AiEngineService(private val context: Context) {
 
     private fun buildSystemPrompt(engineMode: AiEngineMode): String {
         return if (engineMode == AiEngineMode.DEEP_THINK) {
-            "You are Auralis AI, a helpful, clear, and thoughtful assistant. Think carefully step-by-step and provide direct, natural responses without unnecessary boilerplate tables or filler. Never output Chinese characters."
+            "You are Auralis AI, an advanced reasoning assistant. Break down complex problems step-by-step, think deeply and rigorously, and provide clear, accurate, and natural answers without unnecessary boilerplate tables or filler. Never output Chinese characters."
         } else {
             "You are Auralis AI, a fast, helpful, and concise assistant. Respond naturally and directly like a conversational partner without unnecessary boilerplate tables or filler. Never output Chinese characters."
         }
     }
 
+    private data class EncodedImagePayload(
+        val mimeType: String,
+        val base64Data: String
+    )
+
     /**
-     * Calls the configured live AI API (Gemini 3.1 Flash-Lite / 2.5 Flash or Groq / LongCat)
-     * and streams real generated text onto Dispatchers.Main.
-     * Never outputs hardcoded dummy tables or canned mock templates.
+     * Streams response using SSE (`?alt=sse`) and header authentication (`x-goog-api-key`):
+     * - Fast Mode Primary: 'gemini-3.8-flash'
+     *   URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse
+     * - Fast Mode Fallback: 'gemini-3.1-flash-lite'
+     *   URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse
+     * - Deep Think Chain: sequentially attempts `deep_think_chain` (`openai/gpt-oss-120b` -> `qwen/qwen3.8-27b` -> `llama-3.3-70b-versatile`) via Groq API,
+     *   failing over within <400ms on 404/429/deprecated status, and falling back to `deep_think_gemini_fallback` ('gemini-3.8-flash' -> 'gemini-3.1-flash-lite').
      */
     suspend fun streamResponse(
         prompt: String,
@@ -190,150 +243,345 @@ class AiEngineService(private val context: Context) {
         conversationHistory: List<DesiMessage>,
         onToken: suspend (String) -> Unit
     ): Result<Pair<String, List<Citation>>> = withContext(Dispatchers.IO) {
-        val geminiKey = getGeminiApiKey()
-        val groqKey = getGroqApiKey()
-        val longCatKey = getLongCatApiKey()
+        val geminiKey = BuildConfig.GEMINI_API_KEY.takeIf { it.isNotBlank() }
+            ?: prefs.getString("gemini_api_key", null)?.trim()?.takeIf { it.isNotBlank() }
+            ?: System.getenv("GEMINI_API_KEY") ?: ""
 
-        if (geminiKey.isBlank() && groqKey.isBlank() && longCatKey.isBlank()) {
-            return@withContext Result.failure(
-                Exception("Please add your API key in Settings to start chatting.")
-            )
-        }
+        val groqKey = BuildConfig.GROQ_API_KEY.takeIf { it.isNotBlank() }
+            ?: prefs.getString("groq_api_key", null)?.trim()?.takeIf { it.isNotBlank() }
+            ?: System.getenv("GROQ_API_KEY") ?: ""
 
-        val base64Image = encodeImageIfPresent(imageUri)
+        val encodedImage = encodeImageIfPresent(imageUri)
         val systemInstruction = buildSystemPrompt(engineMode)
-        var generatedText: String? = null
+        var streamedText: String? = null
         var lastErrorMessage: String? = null
 
-        // 1. Deep Think Mode: try primary reasoning (3.5s timeout), then Groq openai/gpt-oss-120b, then Gemini
-        if (engineMode == AiEngineMode.DEEP_THINK && base64Image == null) {
-            if (longCatKey.isNotBlank()) {
-                val res = tryPrimaryReasoningWithTimeout(longCatKey, prompt, systemInstruction, conversationHistory)
-                if (res != null) generatedText = res
-            }
-
-            if (generatedText == null && groqKey.isNotBlank()) {
-                val res = tryGroqEngine(groqKey, prompt, systemInstruction, conversationHistory)
-                res.onSuccess { generatedText = it }
-                    .onFailure { lastErrorMessage = it.localizedMessage }
-            }
-        }
-
-        // 2. Fast Mode or Deep Think fallback: call Gemini (gemini-3.1-flash-lite-preview / gemini-2.5-flash)
-        if (generatedText == null && geminiKey.isNotBlank()) {
-            val res = tryGeminiEngine(geminiKey, prompt, base64Image, engineMode, systemInstruction, conversationHistory)
-            res.onSuccess { generatedText = it }
+        // 1. Deep Think Mode (text-only): Cascading `deep_think_chain` via Groq API
+        if (engineMode == AiEngineMode.DEEP_THINK && encodedImage == null && groqKey.isNotBlank()) {
+            val groqRes = tryGroqDeepThinkChain(
+                apiKey = groqKey,
+                prompt = prompt,
+                systemInstruction = systemInstruction,
+                history = conversationHistory,
+                onToken = onToken
+            )
+            groqRes.onSuccess { streamedText = it }
                 .onFailure { lastErrorMessage = it.localizedMessage }
         }
 
-        // 3. If Fast Mode was selected and user only provided Groq key, use Groq
-        if (generatedText == null && groqKey.isNotBlank() && base64Image == null) {
-            val res = tryGroqEngine(groqKey, prompt, systemInstruction, conversationHistory)
-            res.onSuccess { generatedText = it }
+        // 2. Fast Mode (Text & Multimodal Images) or Deep Think Gemini Fallback -> Gemini SSE endpoints
+        if (streamedText.isNullOrBlank() && geminiKey.isNotBlank()) {
+            val geminiRes = tryGeminiSseEndpoints(
+                apiKey = geminiKey,
+                prompt = prompt,
+                encodedImage = encodedImage,
+                engineMode = engineMode,
+                systemInstruction = systemInstruction,
+                history = conversationHistory,
+                onToken = onToken
+            )
+            geminiRes.onSuccess { streamedText = it }
                 .onFailure { lastErrorMessage = it.localizedMessage }
         }
 
-        val finalResponse = generatedText?.let { sanitizeStreamChunk(it).trim() }
-        if (finalResponse.isNullOrBlank()) {
-            val cleanError = lastErrorMessage
-                ?.let { sanitizeStreamChunk(it).lines().firstOrNull()?.take(120) }
-                ?.takeIf { it.isNotBlank() }
-                ?: "Unable to reach AI service. Please check your API key in Settings."
-            return@withContext Result.failure(Exception(cleanError))
+        // 3. Seamless Cloud SSE Proxy fallback (handles ambient AQ.* keys on external devices)
+        if (streamedText.isNullOrBlank()) {
+            val proxyRes = tryCloudSseProxy(
+                prompt = prompt,
+                encodedImage = encodedImage,
+                engineMode = engineMode,
+                history = conversationHistory,
+                onToken = onToken
+            )
+            proxyRes.onSuccess { streamedText = it }
+                .onFailure { if (lastErrorMessage == null) lastErrorMessage = it.localizedMessage }
         }
 
-        // Stream the real API response smoothly onto Dispatchers.Main
-        val words = finalResponse.split(Regex("(?<=\\s)"))
-        val accumulated = StringBuilder()
-        val batchSize = (words.size / 30).coerceIn(2, 8)
-        var index = 0
-        while (index < words.size) {
-            val end = (index + batchSize).coerceAtMost(words.size)
-            val chunk = words.subList(index, end).joinToString("")
-                .replace("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF]".toRegex(), "")
-            accumulated.append(chunk)
-            val snapshot = accumulated.toString()
+        val finalResponse = streamedText?.let { sanitizeStreamChunk(it).trim() }
+        if (!finalResponse.isNullOrBlank()) {
             withContext(Dispatchers.Main) {
-                onToken(snapshot)
+                onToken(finalResponse)
             }
-            index = end
-            if (index < words.size) {
-                delay(14L)
-            }
+            return@withContext Result.success(Pair(finalResponse, emptyList()))
         }
 
-        Result.success(Pair(finalResponse, emptyList()))
+        val cleanError = lastErrorMessage
+            ?.let { sanitizeStreamChunk(it).lines().firstOrNull()?.take(120) }
+            ?.takeIf { it.isNotBlank() }
+            ?: "Unable to reach AI service. Please check your internet connection."
+        Result.failure(Exception(cleanError))
     }
 
-    private fun tryPrimaryReasoningWithTimeout(
+    /**
+     * Streams SSE from Gemini endpoints using 'x-goog-api-key' header and thinking_config.thinking_level = "medium".
+     */
+    private suspend fun tryGeminiSseEndpoints(
         apiKey: String,
         prompt: String,
+        encodedImage: EncodedImagePayload?,
+        engineMode: AiEngineMode,
         systemInstruction: String,
-        history: List<DesiMessage>
-    ): String? {
-        return try {
-            val url = URL("https://api.longcat.chat/v1/chat/completions")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("Authorization", "Bearer $apiKey")
-                doOutput = true
-                connectTimeout = 3500
-                readTimeout = 3500
-            }
-
-            val payload = JSONObject().apply {
-                put("model", "LongCat-2.0")
-                put("messages", buildOpenAiMessages(systemInstruction, history, prompt))
-                put("temperature", 0.5)
-                put("max_tokens", 2048)
-            }
-
-            OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
-                writer.write(payload.toString())
-                writer.flush()
-            }
-
-            val code = conn.responseCode
-            if (code == 402 || code == 429 || code !in 200..299) return null
-
-            val body = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
-            val json = JSONObject(body)
-            val content = json.getJSONArray("choices")
-                .getJSONObject(0)
-                .getJSONObject("message")
-                .optString("content", "")
-            sanitizeStreamChunk(content).takeIf { it.isNotBlank() }
-        } catch (timeout: SocketTimeoutException) {
-            null
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun tryGroqEngine(
-        apiKey: String,
-        prompt: String,
-        systemInstruction: String,
-        history: List<DesiMessage>
+        history: List<DesiMessage>,
+        onToken: suspend (String) -> Unit
     ): Result<String> {
-        val models = listOf("openai/gpt-oss-120b", "llama-3.3-70b-versatile")
-        var lastErr = "Groq request failed."
-        for (model in models) {
+        val payloadWithThinking = buildGeminiRequestPayload(
+            prompt = prompt,
+            encodedImage = encodedImage,
+            systemInstruction = systemInstruction,
+            history = history,
+            includeThinkingConfig = true
+        )
+        val payloadStandard = buildGeminiRequestPayload(
+            prompt = prompt,
+            encodedImage = encodedImage,
+            systemInstruction = systemInstruction,
+            history = history,
+            includeThinkingConfig = false
+        )
+
+        val primaryModel = if (engineMode == AiEngineMode.DEEP_THINK) {
+            modelsConfig.deepThinkGeminiFallback
+        } else {
+            modelsConfig.fastPrimary
+        }
+        val fallbackModel = modelsConfig.fastFallback
+
+        val primaryUrl =
+            "https://generativelanguage.googleapis.com/v1beta/models/$primaryModel:streamGenerateContent?alt=sse"
+        val fallbackUrl =
+            "https://generativelanguage.googleapis.com/v1beta/models/$fallbackModel:streamGenerateContent?alt=sse"
+
+        val attempts = listOf(
+            Triple(primaryUrl, payloadWithThinking, 1200),
+            Triple(fallbackUrl, payloadStandard, 15000),
+            Triple("https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}-preview:streamGenerateContent?alt=sse", payloadStandard, 15000)
+        )
+
+        var lastError = "Unable to connect to Gemini stream."
+
+        for ((endpointUrl, requestBody, timeoutMs) in attempts) {
+            var conn: HttpURLConnection? = null
             try {
-                val url = URL("https://api.groq.com/openai/v1/chat/completions")
-                val conn = (url.openConnection() as HttpURLConnection).apply {
+                conn = (URL(endpointUrl).openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    setRequestProperty("Authorization", "Bearer $apiKey")
+                    setRequestProperty("x-goog-api-key", apiKey)
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Accept", "text/event-stream")
+                    setRequestProperty("Cache-Control", "no-cache")
+                    doOutput = true
+                    connectTimeout = timeoutMs
+                    readTimeout = timeoutMs
+                }
+
+                OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
+                    writer.write(requestBody)
+                    writer.flush()
+                }
+
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    try {
+                        conn.errorStream?.use { it.readBytes() }
+                    } catch (_: Exception) {
+                    }
+                    lastError = "HTTP $code"
+                    continue
+                }
+
+                val accumulated = StringBuilder()
+                BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { reader ->
+                    val rawCollector = StringBuilder()
+                    var line: String? = reader.readLine()
+                    while (line != null) {
+                        val trimmed = line.trim()
+                        if (trimmed.startsWith(":")) {
+                            line = reader.readLine()
+                            continue
+                        }
+                        rawCollector.append(trimmed).append("\n")
+                        if (trimmed.startsWith("data:")) {
+                            val jsonStr = trimmed.removePrefix("data:").trim()
+                            if (jsonStr.isNotEmpty() && jsonStr != "[DONE]") {
+                                val delta = extractCandidateTextFromJson(jsonStr)
+                                if (delta.isNotEmpty()) {
+                                    accumulated.append(sanitizeStreamChunk(delta))
+                                    val snapshot = accumulated.toString()
+                                    withContext(Dispatchers.Main) {
+                                        onToken(snapshot)
+                                    }
+                                }
+                            }
+                        }
+                        line = reader.readLine()
+                    }
+
+                    if (accumulated.isEmpty() && rawCollector.isNotEmpty()) {
+                        val fallbackParsed = sanitizeStreamChunk(parseGeminiBulkPayload(rawCollector.toString())).trim()
+                        if (fallbackParsed.isNotEmpty()) {
+                            accumulated.append(fallbackParsed)
+                            withContext(Dispatchers.Main) {
+                                onToken(fallbackParsed)
+                            }
+                        }
+                    }
+                }
+
+                val finalStr = accumulated.toString().trim()
+                if (finalStr.isNotBlank()) {
+                    return Result.success(finalStr)
+                }
+            } catch (e: Exception) {
+                lastError = e.localizedMessage ?: "Stream connection error."
+            } finally {
+                try {
+                    conn?.disconnect()
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        return Result.failure(Exception(lastError))
+    }
+
+    /**
+     * Streams SSE from the AI Studio Cloud Run server proxy (`server.mjs`) if direct device calls fail.
+     */
+    private suspend fun tryCloudSseProxy(
+        prompt: String,
+        encodedImage: EncodedImagePayload?,
+        engineMode: AiEngineMode,
+        history: List<DesiMessage>,
+        onToken: suspend (String) -> Unit
+    ): Result<String> {
+        val historyJson = JSONArray()
+        for (msg in history.filter { !it.isLoading && it.text.isNotBlank() && it.error == null }.takeLast(8)) {
+            historyJson.put(JSONObject().apply {
+                put("role", if (msg.isUser) "user" else "model")
+                put("text", sanitizeStreamChunk(msg.text))
+            })
+        }
+
+        val payloadJson = JSONObject().apply {
+            put("prompt", prompt)
+            put("engineMode", engineMode.name)
+            put("history", historyJson)
+            if (encodedImage != null) {
+                put("imageBase64", "data:${encodedImage.mimeType};base64,${encodedImage.base64Data}")
+            }
+        }.toString()
+
+        var lastErr = "Service unavailable."
+        for (proxyUrl in CLOUD_PROXY_ENDPOINTS) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(proxyUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Accept", "text/event-stream")
                     doOutput = true
                     connectTimeout = 8000
-                    readTimeout = 18000
+                    readTimeout = 25000
+                }
+
+                OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
+                    writer.write(payloadJson)
+                    writer.flush()
+                }
+
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    try {
+                        conn.errorStream?.use { it.readBytes() }
+                    } catch (_: Exception) {
+                    }
+                    continue
+                }
+
+                val accumulated = StringBuilder()
+                BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { reader ->
+                    var line: String? = reader.readLine()
+                    while (line != null) {
+                        val trimmed = line.trim()
+                        if (trimmed.startsWith(":")) {
+                            line = reader.readLine()
+                            continue
+                        }
+                        if (trimmed.startsWith("data:")) {
+                            val jsonStr = trimmed.removePrefix("data:").trim()
+                            if (jsonStr.isNotEmpty() && jsonStr != "[DONE]") {
+                                val delta = extractCandidateTextFromJson(jsonStr)
+                                if (delta.isNotEmpty()) {
+                                    accumulated.append(sanitizeStreamChunk(delta))
+                                    val snapshot = accumulated.toString()
+                                    withContext(Dispatchers.Main) {
+                                        onToken(snapshot)
+                                    }
+                                }
+                            }
+                        } else if (trimmed.startsWith("{") && trimmed.contains("\"reply\"")) {
+                            val obj = JSONObject(trimmed)
+                            val rep = sanitizeStreamChunk(obj.optString("reply", "")).trim()
+                            if (rep.isNotEmpty()) {
+                                accumulated.append(rep)
+                                withContext(Dispatchers.Main) {
+                                    onToken(rep)
+                                }
+                            }
+                        }
+                        line = reader.readLine()
+                    }
+                }
+
+                val resultText = accumulated.toString().trim()
+                if (resultText.isNotBlank()) {
+                    return Result.success(resultText)
+                }
+            } catch (e: Exception) {
+                lastErr = e.localizedMessage ?: "Network error."
+            } finally {
+                try {
+                    conn?.disconnect()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        return Result.failure(Exception(lastErr))
+    }
+
+    /**
+     * Deep Think Cascading Engine:
+     * Sequentially attempts models in `modelsConfig.deepThinkChain`:
+     *   1. "openai/gpt-oss-120b"
+     *   2. "qwen/qwen3.8-27b"
+     *   3. "llama-3.3-70b-versatile"
+     * via Groq API (`https://api.groq.com/openai/v1/chat/completions`), failing over within <400ms on 404/429/deprecated.
+     */
+    private suspend fun tryGroqDeepThinkChain(
+        apiKey: String,
+        prompt: String,
+        systemInstruction: String,
+        history: List<DesiMessage>,
+        onToken: suspend (String) -> Unit
+    ): Result<String> {
+        val messagesPayload = buildOpenAiMessages(systemInstruction, history, prompt)
+        var lastError = "Deep Think Groq chain unavailable."
+
+        for (candidateModel in modelsConfig.deepThinkChain) {
+            var conn: HttpURLConnection? = null
+            try {
+                val url = URL(GROQ_COMPLETIONS_ENDPOINT)
+                conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Authorization", "Bearer $apiKey")
+                    doOutput = true
+                    connectTimeout = 3500
+                    readTimeout = 15000
                 }
 
                 val payload = JSONObject().apply {
-                    put("model", model)
-                    put("messages", buildOpenAiMessages(systemInstruction, history, prompt))
+                    put("model", candidateModel)
+                    put("messages", messagesPayload)
                     put("temperature", 0.5)
                     put("max_tokens", 2048)
                 }
@@ -345,7 +593,11 @@ class AiEngineService(private val context: Context) {
 
                 val code = conn.responseCode
                 if (code !in 200..299) {
-                    lastErr = "Groq API error (HTTP $code)."
+                    try {
+                        conn.errorStream?.use { it.readBytes() }
+                    } catch (_: Exception) {
+                    }
+                    lastError = "Groq ($candidateModel) HTTP $code"
                     continue
                 }
 
@@ -357,124 +609,142 @@ class AiEngineService(private val context: Context) {
                     .optString("content", "")
                 val sanitized = sanitizeStreamChunk(content).trim()
                 if (sanitized.isNotBlank()) {
+                    withContext(Dispatchers.Main) {
+                        onToken(sanitized)
+                    }
                     return Result.success(sanitized)
                 }
             } catch (e: Exception) {
-                lastErr = e.localizedMessage ?: "Network error contacting Groq."
-            }
-        }
-        return Result.failure(Exception(lastErr))
-    }
-
-    private fun tryGeminiEngine(
-        apiKey: String,
-        prompt: String,
-        base64Image: String?,
-        engineMode: AiEngineMode,
-        systemInstruction: String,
-        history: List<DesiMessage>
-    ): Result<String> {
-        val candidateModels = listOf("gemini-3.1-flash-lite-preview", "gemini-2.5-flash")
-        var lastError = "Gemini API request failed."
-
-        for (modelName in candidateModels) {
-            try {
-                val urlString = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
-                val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    doOutput = true
-                    connectTimeout = 10000
-                    readTimeout = 25000
+                lastError = e.localizedMessage ?: "Network error contacting Groq ($candidateModel)."
+            } finally {
+                try {
+                    conn?.disconnect()
+                } catch (_: Exception) {
                 }
-
-                val contentsArray = JSONArray()
-                val validHistory = history.filter { !it.isLoading && it.text.isNotBlank() && it.error == null }.takeLast(10)
-                var lastRole: String? = null
-                for (msg in validHistory) {
-                    val role = if (msg.isUser) "user" else "model"
-                    if (role == lastRole && contentsArray.length() > 0) {
-                        val lastTurn = contentsArray.getJSONObject(contentsArray.length() - 1)
-                        lastTurn.getJSONArray("parts").put(JSONObject().put("text", "\n" + sanitizeStreamChunk(msg.text)))
-                    } else {
-                        contentsArray.put(JSONObject().apply {
-                            put("role", role)
-                            put("parts", JSONArray().put(JSONObject().put("text", sanitizeStreamChunk(msg.text))))
-                        })
-                        lastRole = role
-                    }
-                }
-
-                val currentParts = JSONArray()
-                if (base64Image != null) {
-                    currentParts.put(JSONObject().apply {
-                        put("inline_data", JSONObject().apply {
-                            put("mime_type", "image/jpeg")
-                            put("data", base64Image)
-                        })
-                    })
-                }
-
-                val actualPrompt = prompt.ifBlank { "Describe and analyze this image." }
-                currentParts.put(JSONObject().put("text", actualPrompt))
-
-                contentsArray.put(JSONObject().apply {
-                    put("role", "user")
-                    put("parts", currentParts)
-                })
-
-                val jsonBody = JSONObject().apply {
-                    put("system_instruction", JSONObject().apply {
-                        put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
-                    })
-                    put("contents", contentsArray)
-                    put("generationConfig", JSONObject().apply {
-                        put("temperature", if (engineMode == AiEngineMode.DEEP_THINK) 0.4 else 0.7)
-                        put("maxOutputTokens", 2048)
-                    })
-                }
-
-                OutputStreamWriter(conn.outputStream, "UTF-8").use { os ->
-                    os.write(jsonBody.toString())
-                    os.flush()
-                }
-
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    lastError = if (code == 400 || code == 403) {
-                        "Invalid Gemini API key. Please check Settings."
-                    } else if (code == 429) {
-                        "Rate limit reached (HTTP 429). Please try again shortly."
-                    } else {
-                        "AI service returned HTTP $code."
-                    }
-                    continue
-                }
-
-                val responseText = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { it.readText() }
-                val rootJson = JSONObject(responseText)
-                val candidates = rootJson.optJSONArray("candidates") ?: continue
-                if (candidates.length() == 0) continue
-
-                val candidateObj = candidates.getJSONObject(0)
-                val partsArray = candidateObj.getJSONObject("content").getJSONArray("parts")
-                val sb = StringBuilder()
-                for (i in 0 until partsArray.length()) {
-                    val partObj = partsArray.getJSONObject(i)
-                    if (partObj.has("text")) {
-                        sb.append(partObj.getString("text"))
-                    }
-                }
-
-                val sanitized = sanitizeStreamChunk(sb.toString()).trim()
-                if (sanitized.isNotBlank()) {
-                    return Result.success(sanitized)
-                }
-            } catch (e: Exception) {
-                lastError = "Connection error: Unable to reach AI service."
             }
         }
         return Result.failure(Exception(lastError))
+    }
+
+    private fun buildGeminiRequestPayload(
+        prompt: String,
+        encodedImage: EncodedImagePayload?,
+        systemInstruction: String,
+        history: List<DesiMessage>,
+        includeThinkingConfig: Boolean
+    ): String {
+        val contentsArray = JSONArray()
+        val validHistory = history
+            .filter { !it.isLoading && it.text.isNotBlank() && it.error == null }
+            .takeLast(10)
+            .dropWhile { !it.isUser }
+
+        var lastRole: String? = null
+        for (msg in validHistory) {
+            val role = if (msg.isUser) "user" else "model"
+            val cleanText = sanitizeStreamChunk(msg.text).trim()
+            if (cleanText.isEmpty()) continue
+
+            if (role == lastRole && contentsArray.length() > 0) {
+                val lastTurn = contentsArray.getJSONObject(contentsArray.length() - 1)
+                lastTurn.getJSONArray("parts").put(JSONObject().put("text", "\n$cleanText"))
+            } else {
+                contentsArray.put(JSONObject().apply {
+                    put("role", role)
+                    put("parts", JSONArray().put(JSONObject().put("text", cleanText)))
+                })
+                lastRole = role
+            }
+        }
+
+        val currentParts = JSONArray()
+        if (encodedImage != null) {
+            currentParts.put(JSONObject().apply {
+                put("inlineData", JSONObject().apply {
+                    put("mimeType", encodedImage.mimeType)
+                    put("data", encodedImage.base64Data)
+                })
+            })
+        }
+
+        val actualPrompt = prompt.ifBlank { "Describe and analyze this image in detail." }
+        currentParts.put(JSONObject().put("text", actualPrompt))
+
+        if (lastRole == "user" && contentsArray.length() > 0) {
+            val lastTurn = contentsArray.getJSONObject(contentsArray.length() - 1)
+            val existingParts = lastTurn.getJSONArray("parts")
+            for (i in 0 until currentParts.length()) {
+                existingParts.put(currentParts.getJSONObject(i))
+            }
+        } else {
+            contentsArray.put(JSONObject().apply {
+                put("role", "user")
+                put("parts", currentParts)
+            })
+        }
+
+        val generationConfigObj = JSONObject()
+        if (includeThinkingConfig) {
+            generationConfigObj.put(
+                "thinking_config",
+                JSONObject().put("thinking_level", "medium")
+            )
+        }
+
+        return JSONObject().apply {
+            put("systemInstruction", JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
+            })
+            put("contents", contentsArray)
+            put("generationConfig", generationConfigObj)
+        }.toString()
+    }
+
+    private fun extractCandidateTextFromJson(jsonStr: String): String {
+        return try {
+            val obj = JSONObject(jsonStr)
+            if (obj.has("text") && !obj.has("candidates")) {
+                return obj.optString("text", "")
+            }
+            val sb = StringBuilder()
+            appendCandidateText(obj, sb)
+            sb.toString()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun parseGeminiBulkPayload(rawBody: String): String {
+        val trimmed = rawBody.trim()
+        if (trimmed.isEmpty()) return ""
+        val sb = StringBuilder()
+        try {
+            if (trimmed.startsWith("[")) {
+                val array = JSONArray(trimmed)
+                for (i in 0 until array.length()) {
+                    val item = array.optJSONObject(i) ?: continue
+                    appendCandidateText(item, sb)
+                }
+            } else if (trimmed.startsWith("{")) {
+                appendCandidateText(JSONObject(trimmed), sb)
+            }
+        } catch (_: Exception) {
+        }
+        return sb.toString()
+    }
+
+    private fun appendCandidateText(rootObj: JSONObject, out: StringBuilder) {
+        val candidates = rootObj.optJSONArray("candidates") ?: return
+        if (candidates.length() == 0) return
+        val contentObj = candidates.optJSONObject(0)?.optJSONObject("content") ?: return
+        val partsArray = contentObj.optJSONArray("parts") ?: return
+        for (i in 0 until partsArray.length()) {
+            val partObj = partsArray.optJSONObject(i) ?: continue
+            if (partObj.optBoolean("thought", false)) continue
+            if (partObj.has("text")) {
+                out.append(partObj.optString("text", ""))
+            }
+        }
     }
 
     private fun buildOpenAiMessages(
@@ -500,29 +770,51 @@ class AiEngineService(private val context: Context) {
         return arr
     }
 
-    private fun encodeImageIfPresent(imageUri: Uri?): String? {
+    private fun encodeImageIfPresent(imageUri: Uri?): EncodedImagePayload? {
         if (imageUri == null) return null
+        var originalBitmap: Bitmap? = null
+        var scaledBitmap: Bitmap? = null
         return try {
             context.contentResolver.openInputStream(imageUri)?.use { inputStream ->
-                val bitmap = BitmapFactory.decodeStream(inputStream) ?: return null
-                val maxDimension = 1024
-                val scale = if (bitmap.width > maxDimension || bitmap.height > maxDimension) {
-                    maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
-                } else 1f
-                val scaledBitmap = if (scale < 1f) {
-                    Bitmap.createScaledBitmap(
-                        bitmap,
-                        (bitmap.width * scale).toInt(),
-                        (bitmap.height * scale).toInt(),
-                        true
-                    )
-                } else bitmap
-                val out = ByteArrayOutputStream()
-                scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                originalBitmap = BitmapFactory.decodeStream(inputStream)
+            }
+            val bitmap = originalBitmap ?: return null
+
+            val maxDimension = 1024
+            val scale = if (bitmap.width > maxDimension || bitmap.height > maxDimension) {
+                maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height)
+            } else {
+                1f
+            }
+
+            scaledBitmap = if (scale < 1f) {
+                Bitmap.createScaledBitmap(
+                    bitmap,
+                    (bitmap.width * scale).toInt().coerceAtLeast(1),
+                    (bitmap.height * scale).toInt().coerceAtLeast(1),
+                    true
+                )
+            } else {
+                bitmap
+            }
+
+            val base64String = ByteArrayOutputStream().use { out ->
+                scaledBitmap?.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                out.flush()
                 Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
             }
+
+            EncodedImagePayload(mimeType = "image/jpeg", base64Data = base64String)
         } catch (e: Exception) {
             null
+        } finally {
+            try {
+                if (scaledBitmap != null && scaledBitmap != originalBitmap) {
+                    scaledBitmap?.recycle()
+                }
+                originalBitmap?.recycle()
+            } catch (_: Exception) {
+            }
         }
     }
 }

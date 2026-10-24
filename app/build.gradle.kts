@@ -1,7 +1,46 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.secrets)
+}
+
+fun resolveProjectSecret(keyName: String, projectRootDir: File): String {
+  val envVal = System.getenv(keyName)?.trim().orEmpty()
+  if (envVal.isNotEmpty()) return envVal
+
+  for (fileName in listOf(".env", "local.properties", "secrets.properties")) {
+    val f = File(projectRootDir, fileName)
+    if (f.exists()) {
+      try {
+        val props = Properties()
+        val stream = f.inputStream()
+        try {
+          props.load(stream)
+        } finally {
+          stream.close()
+        }
+        val v = props.getProperty(keyName)?.trim()?.removeSurrounding("\"")?.removeSurrounding("'").orEmpty()
+        if (v.isNotEmpty()) return v
+      } catch (_: Exception) {
+      }
+    }
+  }
+
+  val devEnvFile = File("/app/.dev.env.json")
+  if (devEnvFile.exists()) {
+    try {
+      val content = devEnvFile.readText()
+      val regex = Regex("\"${Regex.escape(keyName)}\"\\s*:\\s*\"([^\"]+)\"")
+      val match = regex.find(content)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+      if (match.isNotEmpty()) return match
+    } catch (_: Exception) {
+    }
+  }
+
+  return ""
 }
 
 android {
@@ -17,13 +56,13 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-    val geminiKey = (System.getenv("GEMINI_API_KEY") ?: "").replace("\"", "\\\"")
+    val geminiKey = resolveProjectSecret("GEMINI_API_KEY", rootDir).replace("\\", "\\\\").replace("\"", "\\\"")
     buildConfigField("String", "GEMINI_API_KEY", "\"$geminiKey\"")
 
-    val groqKey = (System.getenv("GROQ_API_KEY") ?: "").replace("\"", "\\\"")
+    val groqKey = resolveProjectSecret("GROQ_API_KEY", rootDir).replace("\\", "\\\\").replace("\"", "\\\"")
     buildConfigField("String", "GROQ_API_KEY", "\"$groqKey\"")
 
-    val longcatKey = (System.getenv("LONGCAT_API_KEY") ?: "").replace("\"", "\\\"")
+    val longcatKey = resolveProjectSecret("LONGCAT_API_KEY", rootDir).replace("\\", "\\\\").replace("\"", "\\\"")
     buildConfigField("String", "LONGCAT_API_KEY", "\"$longcatKey\"")
   }
 
@@ -66,8 +105,6 @@ android {
   }
 }
 
-// Configure the Secrets Gradle Plugin to use .env and .env.example files
-// to match the convention used in Web projects.
 secrets {
   propertiesFileName = if (rootProject.file(".env").exists()) ".env" else "secrets.properties"
   defaultPropertiesFileName = if (rootProject.file(".env.example").exists()) ".env.example" else "local.defaults.properties"

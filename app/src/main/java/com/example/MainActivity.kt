@@ -33,6 +33,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -67,12 +68,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -147,9 +145,7 @@ fun AuralisAIMainScreen() {
 
     var inputPrompt by remember { mutableStateOf("") }
     var isSynthesizing by remember { mutableStateOf(false) }
-    var showSettingsDialog by remember { mutableStateOf(false) }
-    var geminiKeyInput by remember { mutableStateOf(aiEngine.getGeminiApiKey()) }
-    var groqKeyInput by remember { mutableStateOf(aiEngine.getGroqApiKey()) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
 
     var selectedEngineMode by remember { mutableStateOf(aiEngine.getSavedEngineMode()) }
     var attachedImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -311,16 +307,18 @@ fun AuralisAIMainScreen() {
                     engineMode = activeEngineMode,
                     conversationHistory = historySnapshot,
                     onToken = { partialText ->
-                        val sanitizedPartial = partialText.replace(
-                            "[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF]".toRegex(),
-                            ""
-                        )
-                        val idx = messages.indexOfFirst { it.id == assistantMsgId }
-                        if (idx != -1) {
-                            messages[idx] = messages[idx].copy(
-                                text = sanitizedPartial,
-                                isLoading = true
+                        withContext(Dispatchers.Main) {
+                            val sanitizedPartial = partialText.replace(
+                                "[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF]".toRegex(),
+                                ""
                             )
+                            val idx = messages.indexOfFirst { it.id == assistantMsgId }
+                            if (idx != -1) {
+                                messages[idx] = messages[idx].copy(
+                                    text = sanitizedPartial,
+                                    isLoading = true
+                                )
+                            }
                         }
                     }
                 )
@@ -341,13 +339,13 @@ fun AuralisAIMainScreen() {
                         }
                         persistHistory()
                     }.onFailure { error ->
-                        val oneLineError = (error.localizedMessage ?: "Unable to reach AI service.")
+                        val oneLineError = (error.localizedMessage ?: "Connection interrupted. Please try again.")
                             .replace("[\\u4E00-\\u9FFF\\u3400-\\u4DBF\\uF900-\\uFAFF]".toRegex(), "")
                             .lines()
                             .firstOrNull()
                             ?.trim()
                             .orEmpty()
-                            .ifBlank { "Unable to reach AI service." }
+                            .ifBlank { "Connection interrupted. Please try again." }
                         if (idx != -1) {
                             messages[idx] = messages[idx].copy(
                                 text = oneLineError,
@@ -369,6 +367,57 @@ fun AuralisAIMainScreen() {
         }
     }
 
+    if (showSettingsSheet) {
+        val cfg = aiEngine.modelsConfig
+        AlertDialog(
+            onDismissRequest = { showSettingsSheet = false },
+            containerColor = Color(0xFF141414),
+            titleContentColor = ChatTextPrimary,
+            textContentColor = ChatTextSecondary,
+            title = {
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Fast Mode: ${cfg.fastPrimary} → ${cfg.fastFallback}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ChatTextSecondary
+                    )
+                    Text(
+                        text = "Deep Think Chain: ${cfg.deepThinkChain.joinToString(" → ")} → ${cfg.deepThinkGeminiFallback}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ChatTextSecondary
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (!isSynthesizing && messages.isNotEmpty()) {
+                            triggerHaptic(strong = false)
+                            ttsEngine?.stop()
+                            currentlySpeakingId = null
+                            messages.clear()
+                            persistHistory()
+                        }
+                        showSettingsSheet = false
+                    }
+                ) {
+                    Text("Clear Chat", color = ChatTextPrimary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSettingsSheet = false }) {
+                    Text("Done", color = ChatTextSecondary)
+                }
+            }
+        )
+    }
+
     Scaffold(
         containerColor = ChatDarkBg,
         topBar = {
@@ -380,9 +429,8 @@ fun AuralisAIMainScreen() {
                     aiEngine.saveEngineMode(mode)
                 },
                 onOpenSettings = {
-                    geminiKeyInput = aiEngine.getGeminiApiKey()
-                    groqKeyInput = aiEngine.getGroqApiKey()
-                    showSettingsDialog = true
+                    triggerHaptic(strong = false)
+                    showSettingsSheet = true
                 }
             )
         }
@@ -441,7 +489,7 @@ fun AuralisAIMainScreen() {
                 }
             }
 
-            // Optional attached image preview above input bar
+            // Attached image preview above input bar
             AnimatedVisibility(
                 visible = attachedImageUri != null,
                 enter = fadeIn(),
@@ -528,79 +576,12 @@ fun AuralisAIMainScreen() {
             )
         }
     }
-
-    if (showSettingsDialog) {
-        AlertDialog(
-            onDismissRequest = { showSettingsDialog = false },
-            title = {
-                Text(
-                    text = "Settings",
-                    fontWeight = FontWeight.SemiBold,
-                    color = ChatTextPrimary
-                )
-            },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = geminiKeyInput,
-                        onValueChange = { geminiKeyInput = it },
-                        label = { Text("Gemini API Key") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = groqKeyInput,
-                        onValueChange = { groqKeyInput = it },
-                        label = { Text("Groq API Key (Optional)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (messages.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        TextButton(
-                            onClick = {
-                                ttsEngine?.stop()
-                                currentlySpeakingId = null
-                                messages.clear()
-                                persistHistory()
-                                showSettingsDialog = false
-                            }
-                        ) {
-                            Text("Clear conversation", color = Color(0xFFFF6B6B))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        aiEngine.saveApiKey(geminiKeyInput, groqKeyInput)
-                        showSettingsDialog = false
-                        Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ChatAccentWhite,
-                        contentColor = ChatDarkBg
-                    )
-                ) {
-                    Text("Save", fontWeight = FontWeight.SemiBold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSettingsDialog = false }) {
-                    Text("Cancel", color = ChatTextSecondary)
-                }
-            },
-            containerColor = ChatSurfaceDock
-        )
-    }
 }
 
 /**
  * Minimal Top Bar:
- * Just the title ("Auralis AI"), a simple clean model selector pill (Fast / Deep Think),
- * and a clean settings icon.
+ * Single-row header with Title ("Auralis AI"), compact Fast / Deep Think toggle capsule,
+ * and Settings gear icon on the right. Zero decorative badges or extra borders.
  */
 @Composable
 private fun MinimalistTopBar(
@@ -626,7 +607,6 @@ private fun MinimalistTopBar(
             color = ChatTextPrimary
         )
 
-        // Simple clean model selector pill (Fast / Deep Think)
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(20.dp))
@@ -667,7 +647,7 @@ private fun MinimalistTopBar(
                 imageVector = Icons.Filled.Settings,
                 contentDescription = "Settings",
                 tint = ChatTextSecondary,
-                modifier = Modifier.size(21.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
     }
@@ -702,10 +682,10 @@ private fun MinimalistFloatingInputBar(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(26.dp))
                 .background(ChatSurfaceDock)
+                .border(1.dp, Color(0xFF262626), RoundedCornerShape(26.dp))
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Simple '+' icon on the left
             IconButton(
                 onClick = onAttachImage,
                 modifier = Modifier
@@ -723,7 +703,6 @@ private fun MinimalistFloatingInputBar(
 
             Spacer(modifier = Modifier.width(10.dp))
 
-            // Clean 'Message' placeholder in center
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -754,7 +733,6 @@ private fun MinimalistFloatingInputBar(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Smooth dynamic Send/Mic button on the right
             Box(
                 modifier = Modifier
                     .size(38.dp)

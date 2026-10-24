@@ -4,17 +4,88 @@ import path from 'node:path';
 
 const PORT = 3000;
 
-function getServerGeminiKey() {
-  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY.trim();
+const DEFAULT_MODELS_CONFIG = {
+  fast_primary: 'gemini-3.8-flash',
+  fast_fallback: 'gemini-3.1-flash-lite',
+  deep_think_chain: [
+    'openai/gpt-oss-120b',
+    'qwen/qwen3.8-27b',
+    'llama-3.3-70b-versatile'
+  ],
+  deep_think_gemini_fallback: 'gemini-3.8-flash'
+};
+
+function loadModelsConfig() {
+  const candidates = [
+    path.resolve('/app/applet/assets/models_config.json'),
+    path.resolve('assets/models_config.json'),
+    path.resolve('/app/applet/app/src/main/assets/models_config.json')
+  ];
+  for (const filePath of candidates) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        return {
+          fast_primary: parsed.fast_primary || DEFAULT_MODELS_CONFIG.fast_primary,
+          fast_fallback: parsed.fast_fallback || DEFAULT_MODELS_CONFIG.fast_fallback,
+          deep_think_chain: Array.isArray(parsed.deep_think_chain) && parsed.deep_think_chain.length > 0
+            ? parsed.deep_think_chain
+            : DEFAULT_MODELS_CONFIG.deep_think_chain,
+          deep_think_gemini_fallback:
+            parsed.deep_think_gemini_fallback || DEFAULT_MODELS_CONFIG.deep_think_gemini_fallback
+        };
+      }
+    } catch {}
+  }
+  return DEFAULT_MODELS_CONFIG;
+}
+
+function resolveServerSecret(keyName) {
+  if (process.env[keyName] && process.env[keyName].trim()) {
+    return process.env[keyName].trim();
+  }
   try {
     const devEnv = JSON.parse(fs.readFileSync('/app/.dev.env.json', 'utf8'));
-    if (devEnv && devEnv.GEMINI_API_KEY) return devEnv.GEMINI_API_KEY.trim();
+    if (devEnv && typeof devEnv[keyName] === 'string' && devEnv[keyName].trim()) {
+      return devEnv[keyName].trim();
+    }
   } catch {}
+  for (const envFile of ['/app/applet/.env', '/app/applet/local.properties']) {
+    try {
+      if (fs.existsSync(envFile)) {
+        const lines = fs.readFileSync(envFile, 'utf8').split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith(keyName + '=')) {
+            const val = trimmed.slice(keyName.length + 1).trim().replace(/^["']|["']$/g, '');
+            if (val) return val;
+          }
+        }
+      }
+    } catch {}
+  }
   return '';
 }
 
 function sanitizeCjk(text) {
   return String(text || '').replace(/[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/g, '');
+}
+
+// Cache 404 model status briefly so repeated fast turns do not block on unavailable preview models
+const unavailableModelUntil = new Map();
+
+function isModelTemporarilyUnavailable(modelName) {
+  const exp = unavailableModelUntil.get(modelName);
+  if (!exp) return false;
+  if (Date.now() > exp) {
+    unavailableModelUntil.delete(modelName);
+    return false;
+  }
+  return true;
+}
+
+function markModelTemporarilyUnavailable(modelName, ttlMs = 120000) {
+  unavailableModelUntil.set(modelName, Date.now() + ttlMs);
 }
 
 const HTML_PAGE = `<!DOCTYPE html>
@@ -23,7 +94,7 @@ const HTML_PAGE = `<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Auralis AI</title>
-  <meta name="description" content="Auralis AI — Minimalist, Clean ChatGPT-Style Interface with Fast and Deep Think Modes" />
+  <meta name="description" content="Auralis AI — Minimalist Obsidian Interface with Fast & Deep Think Engines" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -42,7 +113,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       margin: 0 auto;
       background-color: #0A0A0A;
     }
-    /* Minimal Top Bar */
+    /* Minimal Single-Row Header */
     .top-bar {
       display: flex;
       align-items: center;
@@ -197,24 +268,6 @@ const HTML_PAGE = `<!DOCTYPE html>
       0%, 100% { opacity: 0.3; transform: scale(0.85); }
       50% { opacity: 1; transform: scale(1.05); }
     }
-    .msg-actions {
-      display: flex;
-      gap: 4px;
-      margin-top: 6px;
-    }
-    .action-icon {
-      width: 28px;
-      height: 28px;
-      border: none;
-      background: transparent;
-      color: #6E6E6E;
-      border-radius: 6px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .action-icon:hover { color: #ECECEC; background-color: #171717; }
     /* Attachment Preview */
     .attach-preview-bar {
       display: none;
@@ -257,6 +310,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       display: flex;
       align-items: center;
       background-color: #171717;
+      border: 1px solid #262626;
       border-radius: 26px;
       padding: 6px 8px;
       gap: 10px;
@@ -293,82 +347,64 @@ const HTML_PAGE = `<!DOCTYPE html>
       font-family: inherit;
     }
     .prompt-input::placeholder { color: #6E6E6E; }
-    /* Settings Modal */
-    .modal-backdrop {
+    /* Settings Sheet (Zero API Key Prompts) */
+    .settings-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.7);
+      background: rgba(0, 0, 0, 0.65);
       display: none;
       align-items: center;
       justify-content: center;
-      padding: 16px;
       z-index: 50;
+      padding: 16px;
     }
-    .modal-backdrop.open { display: flex; }
-    .modal-card {
-      background-color: #171717;
-      border-radius: 20px;
+    .settings-backdrop.open { display: flex; }
+    .settings-card {
       width: 100%;
-      max-width: 400px;
+      max-width: 360px;
+      background: #141414;
+      border: 1px solid #262626;
+      border-radius: 20px;
       padding: 20px;
       display: flex;
       flex-direction: column;
       gap: 14px;
     }
-    .modal-title {
-      font-size: 18px;
-      font-weight: 600;
-      color: #ECECEC;
-    }
-    .field-label {
-      font-size: 12px;
-      color: #9B9B9B;
-      margin-bottom: 4px;
-      display: block;
-    }
-    .field-input {
-      width: 100%;
-      padding: 10px 12px;
-      border-radius: 10px;
-      border: 1px solid #2B2B2B;
-      background-color: #0A0A0A;
-      color: #ECECEC;
-      font-size: 14px;
-      outline: none;
-    }
-    .modal-actions {
+    .settings-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-top: 6px;
-    }
-    .btn-text {
-      background: transparent;
-      border: none;
-      color: #9B9B9B;
-      font-size: 14px;
-      cursor: pointer;
-      padding: 8px 10px;
-    }
-    .btn-danger { color: #FF6B6B; }
-    .btn-primary {
-      background-color: #FFFFFF;
-      color: #0A0A0A;
-      border: none;
-      border-radius: 18px;
-      padding: 8px 18px;
-      font-size: 14px;
+      font-size: 16px;
       font-weight: 600;
-      cursor: pointer;
+      color: #ECECEC;
     }
-    .apk-link {
-      display: inline-block;
-      text-decoration: none;
+    .settings-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 12px;
+      background: #1C1C1C;
+      border-radius: 12px;
+      font-size: 13px;
       color: #9B9B9B;
-      font-size: 12.5px;
-      padding-top: 4px;
     }
-    .apk-link:hover { color: #ECECEC; }
+    .settings-row strong {
+      color: #ECECEC;
+      font-size: 13.5px;
+    }
+    .settings-action-btn {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 12px;
+      border: none;
+      background: #262626;
+      color: #ECECEC;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .settings-action-btn:hover { background: #303030; }
   </style>
 </head>
 <body>
@@ -379,8 +415,8 @@ const HTML_PAGE = `<!DOCTYPE html>
         <button class="mode-btn active" id="modeFastBtn" type="button">Fast</button>
         <button class="mode-btn" id="modeDeepBtn" type="button">Deep Think</button>
       </div>
-      <button class="icon-btn" id="openSettingsBtn" type="button" aria-label="Settings">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button class="icon-btn" id="settingsBtn" type="button" aria-label="Settings" title="Settings">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"></circle>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
         </svg>
@@ -420,25 +456,21 @@ const HTML_PAGE = `<!DOCTYPE html>
     </div>
   </div>
 
-  <div class="modal-backdrop" id="settingsModal">
-    <div class="modal-card">
-      <div class="modal-title">Settings</div>
-      <div>
-        <label class="field-label">Gemini API Key</label>
-        <input class="field-input" id="geminiKeyField" type="password" placeholder="AIzaSy..." />
+  <div class="settings-backdrop" id="settingsModal">
+    <div class="settings-card">
+      <div class="settings-header">
+        <span>Settings</span>
+        <button class="icon-btn" id="closeSettingsBtn" type="button" style="width:30px;height:30px;">✕</button>
       </div>
-      <div>
-        <label class="field-label">Groq API Key (Optional)</label>
-        <input class="field-input" id="groqKeyField" type="password" placeholder="gsk_..." />
+      <div class="settings-row">
+        <strong>Fast Mode Routing</strong>
+        <span>gemini-3.8-flash → gemini-3.1-flash-lite</span>
       </div>
-      <a class="apk-link" href="/download/app-debug.apk" download="Auralis-AI-debug.apk">Download Android APK (app-debug.apk)</a>
-      <div class="modal-actions">
-        <button class="btn-text btn-danger" id="clearChatBtn" type="button">Clear conversation</button>
-        <div>
-          <button class="btn-text" id="closeSettingsBtn" type="button">Cancel</button>
-          <button class="btn-primary" id="saveSettingsBtn" type="button">Save</button>
-        </div>
+      <div class="settings-row">
+        <strong>Deep Think Chain</strong>
+        <span>openai/gpt-oss-120b → qwen/qwen3.8-27b → llama-3.3-70b-versatile → gemini-3.8-flash</span>
       </div>
+      <button class="settings-action-btn" id="clearChatBtn" type="button">Start New Conversation</button>
     </div>
   </div>
 
@@ -452,7 +484,6 @@ const HTML_PAGE = `<!DOCTYPE html>
     let history = [];
 
     const chatContainer = document.getElementById('chatContainer');
-    const emptyState = document.getElementById('emptyState');
     const promptInput = document.getElementById('promptInput');
     const sendOrMicBtn = document.getElementById('sendOrMicBtn');
     const actionIconWrap = document.getElementById('actionIconWrap');
@@ -463,13 +494,10 @@ const HTML_PAGE = `<!DOCTYPE html>
     const attachPreviewBar = document.getElementById('attachPreviewBar');
     const attachThumbImg = document.getElementById('attachThumbImg');
     const removeAttachBtn = document.getElementById('removeAttachBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
     const settingsModal = document.getElementById('settingsModal');
-    const openSettingsBtn = document.getElementById('openSettingsBtn');
     const closeSettingsBtn = document.getElementById('closeSettingsBtn');
-    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     const clearChatBtn = document.getElementById('clearChatBtn');
-    const geminiKeyField = document.getElementById('geminiKeyField');
-    const groqKeyField = document.getElementById('groqKeyField');
 
     function syncModeUI() {
       modeFastBtn.classList.toggle('active', engineMode === 'FAST_MODE');
@@ -479,6 +507,19 @@ const HTML_PAGE = `<!DOCTYPE html>
 
     modeFastBtn.onclick = () => { engineMode = 'FAST_MODE'; localStorage.setItem('auralis_mode', engineMode); syncModeUI(); };
     modeDeepBtn.onclick = () => { engineMode = 'DEEP_THINK'; localStorage.setItem('auralis_mode', engineMode); syncModeUI(); };
+
+    settingsBtn.onclick = () => settingsModal.classList.add('open');
+    closeSettingsBtn.onclick = () => settingsModal.classList.remove('open');
+    settingsModal.onclick = (e) => {
+      if (e.target === settingsModal) settingsModal.classList.remove('open');
+    };
+    clearChatBtn.onclick = () => {
+      if (!isSynthesizing) {
+        history = [];
+        chatContainer.innerHTML = '<div class="empty-state" id="emptyState">What can I help with?</div>';
+      }
+      settingsModal.classList.remove('open');
+    };
 
     function syncActionBtn() {
       const hasInput = promptInput.value.trim().length > 0 || Boolean(attachedImageBase64);
@@ -500,18 +541,45 @@ const HTML_PAGE = `<!DOCTYPE html>
       }
     });
 
+    function downscaleAndEncodeImage(file, callback) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1024;
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            const ratio = maxDim / Math.max(width, height);
+            width = Math.max(1, Math.round(width * ratio));
+            height = Math.max(1, Math.round(height * ratio));
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          canvas.width = 0;
+          canvas.height = 0;
+          callback(dataUrl);
+        };
+        img.onerror = () => callback(String(reader.result));
+        img.src = String(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+
     attachBtn.onclick = () => fileInput.click();
     fileInput.onchange = (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        attachedImageBase64 = String(reader.result);
+      downscaleAndEncodeImage(file, (compressedDataUrl) => {
+        attachedImageBase64 = compressedDataUrl;
         attachThumbImg.src = attachedImageBase64;
         attachPreviewBar.classList.add('visible');
         syncActionBtn();
-      };
-      reader.readAsDataURL(file);
+      });
     };
 
     removeAttachBtn.onclick = () => {
@@ -521,29 +589,12 @@ const HTML_PAGE = `<!DOCTYPE html>
       syncActionBtn();
     };
 
-    openSettingsBtn.onclick = () => {
-      geminiKeyField.value = localStorage.getItem('auralis_gemini_key') || '';
-      groqKeyField.value = localStorage.getItem('auralis_groq_key') || '';
-      settingsModal.classList.add('open');
-    };
-    closeSettingsBtn.onclick = () => settingsModal.classList.remove('open');
-    saveSettingsBtn.onclick = () => {
-      localStorage.setItem('auralis_gemini_key', geminiKeyField.value.trim());
-      localStorage.setItem('auralis_groq_key', groqKeyField.value.trim());
-      settingsModal.classList.remove('open');
-    };
-    clearChatBtn.onclick = () => {
-      history = [];
-      chatContainer.innerHTML = '<div class="empty-state" id="emptyState">What can I help with?</div>';
-      settingsModal.classList.remove('open');
-    };
-
     function escapeHtml(str) {
-      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     function formatMarkdown(text) {
-      const parts = text.split(/(\`\`\`[\\s\\S]*?\`\`\`)/g);
+      const parts = String(text || '').split(/(\`\`\`[\\s\\S]*?\`\`\`)/g);
       return parts.map(part => {
         if (part.startsWith('\`\`\`') && part.endsWith('\`\`\`')) {
           const lines = part.slice(3, -3).trim().split('\\n');
@@ -557,6 +608,26 @@ const HTML_PAGE = `<!DOCTYPE html>
         html = html.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
         return html.split('\\n\\n').map(p => '<p>' + p.replace(/\\n/g, '<br/>') + '</p>').join('');
       }).join('');
+    }
+
+    function extractDeltaFromSseJson(jsonStr) {
+      try {
+        const obj = JSON.parse(jsonStr);
+        if (typeof obj.text === 'string' && !obj.candidates) return obj.text;
+        if (typeof obj.reply === 'string') return obj.reply;
+        if (typeof obj.error === 'string') return obj.error;
+        const parts = obj && obj.candidates && obj.candidates[0] && obj.candidates[0].content && obj.candidates[0].content.parts;
+        if (Array.isArray(parts)) {
+          let out = '';
+          for (let i = 0; i < parts.length; i++) {
+            if (parts[i] && !parts[i].thought && typeof parts[i].text === 'string') {
+              out += parts[i].text;
+            }
+          }
+          return out;
+        }
+      } catch (e) {}
+      return '';
     }
 
     async function sendMessage() {
@@ -602,40 +673,74 @@ const HTML_PAGE = `<!DOCTYPE html>
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream'
+          },
           body: JSON.stringify({
             prompt: text,
             imageBase64: image,
             engineMode,
-            history: history.slice(-10),
-            geminiKey: localStorage.getItem('auralis_gemini_key') || '',
-            groqKey: localStorage.getItem('auralis_groq_key') || ''
+            history: history.slice(-10)
           })
         });
-        const data = await res.json();
-        const replyText = (data.reply || data.error || 'Unable to reach AI service.').trim();
 
-        aiRow.innerHTML = '';
         const aiTextEl = document.createElement('div');
         aiTextEl.className = 'ai-text';
+        let accumulated = '';
+        let buffer = '';
 
-        const words = replyText.split(/(?<=\\s)/);
-        let acc = '';
-        const step = Math.max(2, Math.min(8, Math.floor(words.length / 28)));
-        for (let i = 0; i < words.length; i += step) {
-          acc += words.slice(i, i + step).join('');
-          aiTextEl.innerHTML = formatMarkdown(acc);
-          if (!aiTextEl.parentNode) aiRow.appendChild(aiTextEl);
-          chatContainer.scrollTop = chatContainer.scrollHeight;
-          await new Promise(r => setTimeout(r, 14));
+        const reader = res.body && res.body.getReader ? res.body.getReader() : null;
+        if (reader) {
+          const decoder = new TextDecoder();
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\\n');
+            buffer = lines.pop() || '';
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (!line || line.startsWith(':')) continue;
+              if (line.startsWith('data:')) {
+                const jsonPart = line.slice(5).trim();
+                if (jsonPart && jsonPart !== '[DONE]') {
+                  const delta = extractDeltaFromSseJson(jsonPart);
+                  if (delta) {
+                    accumulated += delta;
+                    if (capsule.parentNode) capsule.remove();
+                    if (!aiTextEl.parentNode) aiRow.appendChild(aiTextEl);
+                    aiTextEl.innerHTML = formatMarkdown(accumulated);
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                  }
+                }
+              }
+            }
+          }
+          if (buffer.trim().startsWith('data:')) {
+            const jsonPart = buffer.trim().slice(5).trim();
+            if (jsonPart && jsonPart !== '[DONE]') {
+              const delta = extractDeltaFromSseJson(jsonPart);
+              if (delta) accumulated += delta;
+            }
+          }
+        } else {
+          const fallbackText = await res.text();
+          accumulated = extractDeltaFromSseJson(fallbackText) || fallbackText;
         }
 
-        if (data.reply) {
+        const cleanReply = accumulated.trim();
+        if (cleanReply) {
+          if (capsule.parentNode) capsule.remove();
+          if (!aiTextEl.parentNode) aiRow.appendChild(aiTextEl);
+          aiTextEl.innerHTML = formatMarkdown(cleanReply);
           history.push({ role: 'user', text: text || 'Attached image' });
-          history.push({ role: 'model', text: replyText });
+          history.push({ role: 'model', text: cleanReply });
+        } else {
+          aiRow.innerHTML = '<div class="ai-text"><p>Unable to generate a response right now. Please try again.</p></div>';
         }
       } catch (err) {
-        aiRow.innerHTML = '<div class="ai-text"><p>Unable to reach AI service. Please check your connection or API key.</p></div>';
+        aiRow.innerHTML = '<div class="ai-text"><p>Unable to reach AI service. Please try again.</p></div>';
       } finally {
         isSynthesizing = false;
         chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -653,8 +758,77 @@ const HTML_PAGE = `<!DOCTYPE html>
 </body>
 </html>`;
 
+function buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, includeThinkingConfig) {
+  const contents = [];
+  let lastRole = null;
+  for (const h of rawHistory) {
+    const role = h.role === 'user' ? 'user' : 'model';
+    const cleanText = sanitizeCjk(h.text || '').trim();
+    if (!cleanText) continue;
+    if (contents.length === 0 && role !== 'user') continue;
+    if (role === lastRole && contents.length > 0) {
+      contents[contents.length - 1].parts.push({ text: '\n' + cleanText });
+    } else {
+      contents.push({ role, parts: [{ text: cleanText }] });
+      lastRole = role;
+    }
+  }
+
+  const userParts = [];
+  if (imageBase64 && imageBase64.includes('base64,')) {
+    const [meta, b64] = imageBase64.split('base64,');
+    const mimeMatch = meta.match(/data:([^;]+);/);
+    const mimeType = (mimeMatch && mimeMatch[1] === 'image/png') ? 'image/png' : 'image/jpeg';
+    userParts.push({
+      inlineData: {
+        mimeType,
+        data: b64
+      }
+    });
+  }
+  userParts.push({ text: prompt || 'Describe and analyze this image in detail.' });
+
+  if (lastRole === 'user' && contents.length > 0) {
+    contents[contents.length - 1].parts.push(...userParts);
+  } else {
+    contents.push({ role: 'user', parts: userParts });
+  }
+
+  const generationConfig = includeThinkingConfig
+    ? { thinking_config: { thinking_level: 'medium' } }
+    : {};
+
+  return JSON.stringify({
+    systemInstruction: { parts: [{ text: systemInstruction }] },
+    contents,
+    generationConfig
+  });
+}
+
 const server = http.createServer(async (req, res) => {
+  req.setTimeout(0);
+  res.setTimeout(0);
+
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Accept, x-goog-api-key'
+    });
+    res.end();
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/models-config') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache'
+    });
+    res.end(JSON.stringify(loadModelsConfig()));
+    return;
+  }
 
   if (req.method === 'GET' && url.pathname === '/download/app-debug.apk') {
     const apkPath = path.resolve('/app/applet/app/build/outputs/apk/debug/app-debug.apk');
@@ -672,134 +846,216 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/chat') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
+    req.setTimeout(0);
+    res.setTimeout(0);
+
+    // Immediately set SSE headers and start 5000ms keep-alive heartbeat
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.write(':\n\n');
+
+    const keepAliveTimer = setInterval(() => {
+      if (!res.writableEnded) res.write(':\n\n');
+    }, 5000);
+
+    req.on('close', () => clearInterval(keepAliveTimer));
+
+    const finishStream = () => {
+      clearInterval(keepAliveTimer);
+      if (!res.writableEnded) {
+        res.end();
+      }
+    };
+
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
     req.on('end', async () => {
       try {
-        const payload = JSON.parse(body || '{}');
+        const bodyStr = Buffer.concat(chunks).toString('utf8');
+        chunks.length = 0;
+        const payload = JSON.parse(bodyStr || '{}');
         const prompt = sanitizeCjk(payload.prompt || '');
         const engineMode = payload.engineMode || 'FAST_MODE';
-        const history = Array.isArray(payload.history) ? payload.history : [];
-        const geminiKey = (payload.geminiKey || getServerGeminiKey()).trim();
-        const groqKey = (payload.groqKey || process.env.GROQ_API_KEY || '').trim();
+        const rawHistory = Array.isArray(payload.history) ? payload.history : [];
+        const geminiKey = resolveServerSecret('GEMINI_API_KEY') || (payload.geminiKey || '').trim();
+        const groqKey = resolveServerSecret('GROQ_API_KEY') || (payload.groqKey || '').trim();
         const imageBase64 = payload.imageBase64 || null;
-
-        if (!geminiKey && !groqKey) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Please add your API key in Settings to start chatting.' }));
-          return;
-        }
+        const modelsConfig = loadModelsConfig();
 
         const systemInstruction = engineMode === 'DEEP_THINK'
-          ? 'You are Auralis AI, a helpful, clear, and thoughtful assistant. Think carefully step-by-step and provide direct, natural responses without unnecessary boilerplate tables or filler. Never output Chinese characters.'
+          ? 'You are Auralis AI, an advanced reasoning assistant. Break down complex problems step-by-step, think deeply and rigorously, and provide clear, accurate, and natural answers without unnecessary boilerplate tables or filler. Never output Chinese characters.'
           : 'You are Auralis AI, a fast, helpful, and concise assistant. Respond naturally and directly like a conversational partner without unnecessary boilerplate tables or filler. Never output Chinese characters.';
 
+        // 1. Dynamic Deep Think Cascading Chain via Groq API (when text-only and groqKey exists)
         if (engineMode === 'DEEP_THINK' && groqKey && !imageBase64) {
-          try {
-            const groqResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${groqKey}`
-              },
-              body: JSON.stringify({
-                model: 'openai/gpt-oss-120b',
-                messages: [
-                  { role: 'system', content: systemInstruction },
-                  ...history.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: sanitizeCjk(m.text) })),
-                  { role: 'user', content: prompt }
-                ],
-                temperature: 0.5,
-                max_tokens: 2048
-              })
-            });
-            if (groqResp.ok) {
+          for (const groqModel of modelsConfig.deep_think_chain) {
+            if (isModelTemporarilyUnavailable(groqModel)) continue;
+            try {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 3800);
+              const groqResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${groqKey}`
+                },
+                body: JSON.stringify({
+                  model: groqModel,
+                  messages: [
+                    { role: 'system', content: systemInstruction },
+                    ...rawHistory.map(m => ({
+                      role: m.role === 'user' ? 'user' : 'assistant',
+                      content: sanitizeCjk(m.text)
+                    })),
+                    { role: 'user', content: prompt }
+                  ],
+                  temperature: 0.5,
+                  max_tokens: 2048
+                }),
+                signal: controller.signal
+              });
+              clearTimeout(timer);
+
+              if (!groqResp.ok) {
+                if (groqResp.status === 404 || groqResp.status === 400) {
+                  markModelTemporarilyUnavailable(groqModel);
+                }
+                groqResp.body?.cancel?.();
+                continue;
+              }
+
               const groqData = await groqResp.json();
               const text = sanitizeCjk(groqData?.choices?.[0]?.message?.content || '').trim();
               if (text) {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ reply: text }));
-                return;
-              }
-            }
-          } catch {}
-        }
-
-        if (geminiKey) {
-          const models = ['gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
-          let lastStatus = 500;
-          for (const model of models) {
-            try {
-              const contents = [];
-              for (const h of history) {
-                contents.push({
-                  role: h.role === 'user' ? 'user' : 'model',
-                  parts: [{ text: sanitizeCjk(h.text) }]
-                });
-              }
-              const userParts = [];
-              if (imageBase64 && imageBase64.includes('base64,')) {
-                const [meta, b64] = imageBase64.split('base64,');
-                const mimeMatch = meta.match(/data:([^;]+);/);
-                userParts.push({
-                  inline_data: {
-                    mime_type: mimeMatch ? mimeMatch[1] : 'image/jpeg',
-                    data: b64
-                  }
-                });
-              }
-              userParts.push({ text: prompt || 'Describe and analyze this image.' });
-              contents.push({ role: 'user', parts: userParts });
-
-              const gResp = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-                {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    system_instruction: { parts: [{ text: systemInstruction }] },
-                    contents,
-                    generationConfig: {
-                      temperature: engineMode === 'DEEP_THINK' ? 0.4 : 0.7,
-                      maxOutputTokens: 2048
-                    }
-                  })
-                }
-              );
-              lastStatus = gResp.status;
-              if (!gResp.ok) continue;
-              const gData = await gResp.json();
-              const parts = gData?.candidates?.[0]?.content?.parts || [];
-              const text = sanitizeCjk(parts.map(p => p.text || '').join('')).trim();
-              if (text) {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ reply: text }));
+                res.write(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })}\n\n`);
+                res.write('data: [DONE]\n\n');
+                finishStream();
                 return;
               }
             } catch {}
           }
-          const msg = (lastStatus === 400 || lastStatus === 403)
-            ? 'Invalid Gemini API key. Please check Settings.'
-            : `Unable to reach AI service (HTTP ${lastStatus}).`;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: msg }));
-          return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to reach AI service. Please check your API key in Settings.' }));
+        // 2. Fast Mode & Deep Think Gemini Fallback SSE Streaming
+        if (geminiKey) {
+          const payloadWithThinking = buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, true);
+          const payloadStandard = buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, false);
+
+          const primaryModel = engineMode === 'DEEP_THINK'
+            ? (modelsConfig.deep_think_gemini_fallback || 'gemini-3.8-flash')
+            : (modelsConfig.fast_primary || 'gemini-3.8-flash');
+          const fallbackModel = modelsConfig.fast_fallback || 'gemini-3.1-flash-lite';
+
+          const sseAttempts = [
+            {
+              model: primaryModel,
+              url: `https://generativelanguage.googleapis.com/v1beta/models/${primaryModel}:streamGenerateContent?alt=sse`,
+              body: payloadWithThinking,
+              connectTimeoutMs: 350
+            },
+            {
+              model: fallbackModel,
+              url: `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:streamGenerateContent?alt=sse`,
+              body: payloadStandard,
+              connectTimeoutMs: 15000
+            },
+            {
+              model: `${fallbackModel}-preview`,
+              url: `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}-preview:streamGenerateContent?alt=sse`,
+              body: payloadStandard,
+              connectTimeoutMs: 15000
+            }
+          ];
+
+          for (const attempt of sseAttempts) {
+            if (isModelTemporarilyUnavailable(attempt.model)) continue;
+            let timer = null;
+            try {
+              const controller = new AbortController();
+              timer = setTimeout(() => controller.abort(), attempt.connectTimeoutMs);
+              const upstreamResp = await fetch(attempt.url, {
+                method: 'POST',
+                headers: {
+                  'x-goog-api-key': geminiKey,
+                  'Content-Type': 'application/json',
+                  'Accept': 'text/event-stream'
+                },
+                body: attempt.body,
+                signal: controller.signal
+              });
+              clearTimeout(timer);
+              timer = null;
+
+              if (!upstreamResp.ok || !upstreamResp.body) {
+                if (upstreamResp.status === 404 || upstreamResp.status === 429 || attempt.model === primaryModel) {
+                  markModelTemporarilyUnavailable(attempt.model, 600000);
+                }
+                upstreamResp.body?.cancel?.();
+                continue;
+              }
+
+              const reader = upstreamResp.body.getReader();
+              const decoder = new TextDecoder();
+              let streamedAny = false;
+
+              while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                const chunkStr = sanitizeCjk(decoder.decode(value, { stream: true }));
+                if (chunkStr && !res.writableEnded) {
+                  streamedAny = true;
+                  res.write(chunkStr);
+                }
+              }
+
+              if (streamedAny) {
+                if (!res.writableEnded) {
+                  res.write('\ndata: [DONE]\n\n');
+                }
+                finishStream();
+                return;
+              }
+            } catch {
+              if (timer) clearTimeout(timer);
+              if (attempt.model === primaryModel) {
+                markModelTemporarilyUnavailable(attempt.model, 600000);
+              }
+            }
+          }
+        }
+
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ text: 'Service temporarily unavailable. Please try again.' })}\n\n`);
+          res.write('data: [DONE]\n\n');
+        }
+        finishStream();
       } catch {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to process request.' }));
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ text: 'Unable to process request.' })}\n\n`);
+          res.write('data: [DONE]\n\n');
+        }
+        finishStream();
       }
     });
     return;
   }
 
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate'
+  });
   res.end(HTML_PAGE);
 });
 
+server.timeout = 0;
+server.keepAliveTimeout = 0;
+server.headersTimeout = 0;
+
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('Auralis AI server listening on http://localhost:' + PORT);
+  console.log('Auralis AI SSE server listening on http://localhost:' + PORT);
 });
