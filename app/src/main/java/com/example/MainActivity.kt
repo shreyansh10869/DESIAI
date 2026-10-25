@@ -131,7 +131,7 @@ import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.util.UUID
 
-private val ChatUserBubble212121 = Color(0xFF212121)
+private val ChatUserBubble212121 = Color(0xFF1F1F1F)
 private val ChatDockSurface1E1E1E = Color(0xFF1E1E1E)
 private val ChatDockBorder2E2E2E = Color(0xFF2E2E2E)
 private val ChatDrawerSurface = Color(0xFF121212)

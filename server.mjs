@@ -396,7 +396,7 @@ const HTML_PAGE = `<!DOCTYPE html>
     }
     .user-bubble {
       max-width: 82%;
-      background-color: #212121;
+      background-color: #1F1F1F;
       color: #ECECEC;
       padding: 11px 16px;
       border-radius: 20px;
@@ -1117,7 +1117,7 @@ const HTML_PAGE = `<!DOCTYPE html>
 </body>
 </html>`;
 
-function buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction) {
+function buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, lowThinkingForLite = false) {
   const contents = [];
   let lastRole = null;
   for (const h of rawHistory) {
@@ -1153,10 +1153,14 @@ function buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction) 
     contents.push({ role: 'user', parts: userParts });
   }
 
-  return JSON.stringify({
+  const payloadObj = {
     systemInstruction: { parts: [{ text: systemInstruction }] },
     contents
-  });
+  };
+  if (lowThinkingForLite) {
+    payloadObj.generationConfig = { thinking_config: { thinking_level: 'low' } };
+  }
+  return JSON.stringify(payloadObj);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1296,7 +1300,8 @@ const server = http.createServer(async (req, res) => {
 
         // 2. Gemini SSE Streaming ('gemini-2.5-flash' -> 'gemini-1.5-flash' -> 'gemini-3.1-flash-lite')
         if (geminiKey) {
-          const requestBody = buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction);
+          const requestBodyStandard = buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, false);
+          const requestBodyLowThinking = buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, true);
 
           const sseModels = [
             modelsConfig.fast_primary || 'gemini-2.5-flash',
@@ -1310,8 +1315,9 @@ const server = http.createServer(async (req, res) => {
             let timer = null;
             try {
               const controller = new AbortController();
-              timer = setTimeout(() => controller.abort(), 15000);
+              timer = setTimeout(() => controller.abort(), 25000);
               const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
+              const bodyToUse = modelName.includes('3.1') ? requestBodyLowThinking : requestBodyStandard;
               const upstreamResp = await fetch(endpointUrl, {
                 method: 'POST',
                 headers: {
@@ -1319,7 +1325,7 @@ const server = http.createServer(async (req, res) => {
                   'Content-Type': 'application/json',
                   'Accept': 'text/event-stream'
                 },
-                body: requestBody,
+                body: bodyToUse,
                 signal: controller.signal
               });
               clearTimeout(timer);
