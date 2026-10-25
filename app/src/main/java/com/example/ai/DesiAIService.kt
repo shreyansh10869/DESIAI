@@ -8,6 +8,21 @@ enum class DesiTone(val displayName: String, val badgeText: String, val iconEmoj
     EXAM_MODE("Academic", "ACADEMIC", "")
 }
 
+enum class ResponseStyle(val displayName: String, val promptInstruction: String) {
+    SHORT(
+        displayName = "Short",
+        promptInstruction = "Response style: Keep replies brief, direct, and concise (under 4 sentences unless code is requested)."
+    ),
+    BALANCED(
+        displayName = "Balanced",
+        promptInstruction = "Response style: Provide a balanced, clear, and well-structured response."
+    ),
+    DETAILED(
+        displayName = "Detailed",
+        promptInstruction = "Response style: Provide thorough, comprehensive, in-depth explanations covering all nuances and examples."
+    )
+}
+
 data class Citation(
     val title: String,
     val sourceOrContext: String,
@@ -25,7 +40,8 @@ data class DesiMessage(
     val error: String? = null,
     val imageUriString: String? = null,
     val tone: DesiTone = DesiTone.DESI_FRIEND,
-    val engineMode: AiEngineMode = AiEngineMode.FAST_MODE
+    val engineMode: AiEngineMode = AiEngineMode.FAST_MODE,
+    val isTruncated: Boolean = false
 )
 
 class DesiAIService(context: Context) {
