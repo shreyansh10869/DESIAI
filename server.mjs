@@ -5,14 +5,13 @@ import path from 'node:path';
 const PORT = 3000;
 
 const DEFAULT_MODELS_CONFIG = {
-  fast_primary: 'gemini-3.8-flash',
-  fast_fallback: 'gemini-3.1-flash-lite',
+  fast_primary: 'gemini-2.5-flash',
+  fast_fallback: 'gemini-1.5-flash',
+  fast_active_lite: 'gemini-3.1-flash-lite',
   deep_think_chain: [
-    'openai/gpt-oss-120b',
-    'qwen/qwen3.8-27b',
     'llama-3.3-70b-versatile'
   ],
-  deep_think_gemini_fallback: 'gemini-3.8-flash'
+  deep_think_gemini_fallback: 'gemini-2.5-flash'
 };
 
 function loadModelsConfig() {
@@ -28,6 +27,7 @@ function loadModelsConfig() {
         return {
           fast_primary: parsed.fast_primary || DEFAULT_MODELS_CONFIG.fast_primary,
           fast_fallback: parsed.fast_fallback || DEFAULT_MODELS_CONFIG.fast_fallback,
+          fast_active_lite: parsed.fast_active_lite || DEFAULT_MODELS_CONFIG.fast_active_lite,
           deep_think_chain: Array.isArray(parsed.deep_think_chain) && parsed.deep_think_chain.length > 0
             ? parsed.deep_think_chain
             : DEFAULT_MODELS_CONFIG.deep_think_chain,
@@ -71,7 +71,6 @@ function sanitizeCjk(text) {
   return String(text || '').replace(/[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/g, '');
 }
 
-// Cache 404 model status briefly so repeated fast turns do not block on unavailable preview models
 const unavailableModelUntil = new Map();
 
 function isModelTemporarilyUnavailable(modelName) {
@@ -84,7 +83,7 @@ function isModelTemporarilyUnavailable(modelName) {
   return true;
 }
 
-function markModelTemporarilyUnavailable(modelName, ttlMs = 120000) {
+function markModelTemporarilyUnavailable(modelName, ttlMs = 600000) {
   unavailableModelUntil.set(modelName, Date.now() + ttlMs);
 }
 
@@ -94,7 +93,7 @@ const HTML_PAGE = `<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Auralis AI</title>
-  <meta name="description" content="Auralis AI — Minimalist Obsidian Interface with Fast & Deep Think Engines" />
+  <meta name="description" content="Auralis AI — Authentic ChatGPT-Style Interface with Fast & Deep Think Modes" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     html, body {
@@ -105,28 +104,210 @@ const HTML_PAGE = `<!DOCTYPE html>
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       overflow: hidden;
     }
+    .app-layout {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+      background-color: #0A0A0A;
+      position: relative;
+    }
+    /* Slide-out Left Navigation Drawer */
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 40;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .drawer-backdrop.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .sidebar-drawer {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 290px;
+      background-color: #121212;
+      border-right: 1px solid #1F1F1F;
+      z-index: 45;
+      display: flex;
+      flex-direction: column;
+      padding: 16px 14px;
+      transform: translateX(-100%);
+      transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .sidebar-drawer.open {
+      transform: translateX(0);
+    }
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 6px 14px 6px;
+    }
+    .drawer-logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #1F1F1F;
+      border: 1px solid #2E2E2E;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ECECEC;
+      flex-shrink: 0;
+    }
+    .drawer-title-group {
+      display: flex;
+      flex-direction: column;
+    }
+    .drawer-title {
+      font-size: 16.5px;
+      font-weight: 600;
+      color: #ECECEC;
+      letter-spacing: -0.01em;
+    }
+    .drawer-subtitle {
+      font-size: 11.5px;
+      color: #7A7A7A;
+    }
+    .new-chat-pill {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 11px 16px;
+      border-radius: 24px;
+      background-color: #1E1E1E;
+      border: 1px solid #2E2E2E;
+      color: #ECECEC;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+    }
+    .new-chat-pill:hover {
+      background-color: #262626;
+    }
+    .drawer-section-label {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: #7A7A7A;
+      padding: 16px 8px 6px 8px;
+    }
+    .history-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .history-empty {
+      font-size: 12.5px;
+      color: #6E6E6E;
+      padding: 10px 8px;
+    }
+    .history-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      color: #B8B8B8;
+      font-size: 13.5px;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    .history-item:hover, .history-item.active {
+      background-color: #212121;
+      color: #ECECEC;
+    }
+    .history-item-title {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-right: 8px;
+    }
+    .history-delete-btn {
+      border: none;
+      background: transparent;
+      color: #7A7A7A;
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .history-delete-btn:hover {
+      color: #ECECEC;
+      background: #2E2E2E;
+    }
+    .drawer-footer {
+      border-top: 1px solid #222222;
+      padding-top: 12px;
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      padding: 10px 6px 4px 6px;
+      border-radius: 12px;
+    }
+    .user-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background-color: #262626;
+      color: #ECECEC;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .user-meta {
+      flex: 1;
+      min-width: 0;
+    }
+    .user-name {
+      font-size: 13.5px;
+      font-weight: 500;
+      color: #ECECEC;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .user-email {
+      font-size: 11.5px;
+      color: #7A7A7A;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* Main Chat Shell */
     .app-shell {
+      flex: 1;
       display: flex;
       flex-direction: column;
       height: 100vh;
       max-width: 768px;
       margin: 0 auto;
       background-color: #0A0A0A;
+      width: 100%;
     }
-    /* Minimal Single-Row Header */
+    /* Authentic ChatGPT Top Bar */
     .top-bar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 16px;
+      padding: 10px 12px;
       background-color: #0A0A0A;
       flex-shrink: 0;
-    }
-    .brand-title {
-      font-size: 18px;
-      font-weight: 600;
-      color: #ECECEC;
-      letter-spacing: -0.01em;
     }
     .mode-pill {
       display: inline-flex;
@@ -157,16 +338,15 @@ const HTML_PAGE = `<!DOCTYPE html>
       border-radius: 50%;
       border: none;
       background: transparent;
-      color: #9B9B9B;
+      color: #ECECEC;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      transition: background-color 0.15s ease, color 0.15s ease;
+      transition: background-color 0.15s ease;
     }
     .icon-btn:hover {
       background-color: #171717;
-      color: #ECECEC;
     }
     /* Chat Stream */
     .chat-container {
@@ -180,7 +360,24 @@ const HTML_PAGE = `<!DOCTYPE html>
     }
     .empty-state {
       margin: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
       text-align: center;
+    }
+    .empty-spark-badge {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background-color: #171717;
+      border: 1px solid #282828;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ECECEC;
+    }
+    .empty-greeting {
       color: #ECECEC;
       font-size: 22px;
       font-weight: 600;
@@ -199,7 +396,7 @@ const HTML_PAGE = `<!DOCTYPE html>
     }
     .user-bubble {
       max-width: 82%;
-      background-color: #1F1F1F;
+      background-color: #212121;
       color: #ECECEC;
       padding: 11px 16px;
       border-radius: 20px;
@@ -211,7 +408,7 @@ const HTML_PAGE = `<!DOCTYPE html>
     .user-image {
       max-width: 180px;
       max-height: 180px;
-      border-radius: 14px;
+      border-radius: 16px;
       margin-bottom: 6px;
       object-fit: cover;
     }
@@ -277,9 +474,9 @@ const HTML_PAGE = `<!DOCTYPE html>
     .attach-preview-bar.visible { display: flex; }
     .attach-thumb-wrap {
       position: relative;
-      width: 52px;
-      height: 52px;
-      border-radius: 12px;
+      width: 54px;
+      height: 54px;
+      border-radius: 14px;
       overflow: hidden;
     }
     .attach-thumb-wrap img {
@@ -300,7 +497,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       font-size: 11px;
       cursor: pointer;
     }
-    /* Floating Input Bar */
+    /* ChatGPT Floating Bottom Dock (28px radius, #1E1E1E, 1px #2E2E2E) */
     .bottom-dock-wrap {
       padding: 8px 12px 14px 12px;
       background-color: #0A0A0A;
@@ -309,9 +506,9 @@ const HTML_PAGE = `<!DOCTYPE html>
     .floating-input-bar {
       display: flex;
       align-items: center;
-      background-color: #171717;
-      border: 1px solid #262626;
-      border-radius: 26px;
+      background-color: #1E1E1E;
+      border: 1px solid #2E2E2E;
+      border-radius: 28px;
       padding: 6px 8px;
       gap: 10px;
     }
@@ -320,7 +517,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       height: 38px;
       border-radius: 50%;
       border: none;
-      background-color: #242424;
+      background-color: #2A2A2A;
       color: #ECECEC;
       display: flex;
       align-items: center;
@@ -347,7 +544,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       font-family: inherit;
     }
     .prompt-input::placeholder { color: #6E6E6E; }
-    /* Settings Sheet (Zero API Key Prompts) */
+    /* Settings Modal */
     .settings-backdrop {
       position: fixed;
       inset: 0;
@@ -355,15 +552,15 @@ const HTML_PAGE = `<!DOCTYPE html>
       display: none;
       align-items: center;
       justify-content: center;
-      z-index: 50;
+      z-index: 60;
       padding: 16px;
     }
     .settings-backdrop.open { display: flex; }
     .settings-card {
       width: 100%;
       max-width: 360px;
-      background: #141414;
-      border: 1px solid #262626;
+      background: #161616;
+      border: 1px solid #282828;
       border-radius: 20px;
       padding: 20px;
       display: flex;
@@ -383,7 +580,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       flex-direction: column;
       gap: 4px;
       padding: 10px 12px;
-      background: #1C1C1C;
+      background: #1E1E1E;
       border-radius: 12px;
       font-size: 13px;
       color: #9B9B9B;
@@ -397,61 +594,106 @@ const HTML_PAGE = `<!DOCTYPE html>
       padding: 11px 14px;
       border-radius: 12px;
       border: none;
-      background: #262626;
+      background: #282828;
       color: #ECECEC;
       font-size: 14px;
       font-weight: 500;
       cursor: pointer;
-      transition: background 0.15s ease;
     }
-    .settings-action-btn:hover { background: #303030; }
+    .settings-action-btn:hover { background: #323232; }
   </style>
 </head>
 <body>
-  <div class="app-shell">
-    <header class="top-bar">
-      <div class="brand-title">Auralis AI</div>
-      <div class="mode-pill">
-        <button class="mode-btn active" id="modeFastBtn" type="button">Fast</button>
-        <button class="mode-btn" id="modeDeepBtn" type="button">Deep Think</button>
+  <div class="app-layout">
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <aside class="sidebar-drawer" id="sidebarDrawer">
+      <div class="drawer-header">
+        <div class="drawer-logo">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L14.8 9.2L22 12L14.8 14.8L12 22L9.2 14.8L2 12L9.2 9.2L12 2Z"></path>
+          </svg>
+        </div>
+        <div class="drawer-title-group">
+          <div class="drawer-title">Auralis AI</div>
+          <div class="drawer-subtitle">Conversational Intelligence</div>
+        </div>
       </div>
-      <button class="icon-btn" id="settingsBtn" type="button" aria-label="Settings" title="Settings">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+
+      <button class="new-chat-pill" id="drawerNewChatBtn" type="button">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
         </svg>
+        <span>New Chat</span>
       </button>
-    </header>
 
-    <main class="chat-container" id="chatContainer">
-      <div class="empty-state" id="emptyState">What can I help with?</div>
-    </main>
+      <div class="drawer-section-label">Recent Chats</div>
+      <div class="history-list" id="historyList"></div>
 
-    <div class="attach-preview-bar" id="attachPreviewBar">
-      <div class="attach-thumb-wrap">
-        <img id="attachThumbImg" src="" alt="Attached" />
-        <button class="remove-attach" id="removeAttachBtn" type="button">✕</button>
+      <div class="drawer-footer" id="drawerProfileBtn">
+        <div class="user-avatar">RJ</div>
+        <div class="user-meta">
+          <div class="user-name">Auralis Workspace</div>
+          <div class="user-email">reeta.jaiswal9999@gmail.com</div>
+        </div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9B9B9B" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
       </div>
-    </div>
+    </aside>
 
-    <div class="bottom-dock-wrap">
-      <div class="floating-input-bar">
-        <input type="file" id="fileInput" accept="image/*" style="display:none" />
-        <button class="circle-btn" id="attachBtn" type="button" aria-label="Add attachment">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
+    <div class="app-shell">
+      <header class="top-bar">
+        <button class="icon-btn" id="menuBtn" type="button" aria-label="Open menu">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
           </svg>
         </button>
-        <textarea
-          class="prompt-input"
-          id="promptInput"
-          rows="1"
-          placeholder="Message"
-        ></textarea>
-        <button class="circle-btn" id="sendOrMicBtn" type="button" aria-label="Send">
-          <span id="actionIconWrap"></span>
+
+        <div class="mode-pill">
+          <button class="mode-btn active" id="modeFastBtn" type="button">Fast</button>
+          <button class="mode-btn" id="modeDeepBtn" type="button">Deep Think</button>
+        </div>
+
+        <button class="icon-btn" id="topNewChatBtn" type="button" aria-label="New Chat" title="New Chat">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
         </button>
+      </header>
+
+      <main class="chat-container" id="chatContainer"></main>
+
+      <div class="attach-preview-bar" id="attachPreviewBar">
+        <div class="attach-thumb-wrap">
+          <img id="attachThumbImg" src="" alt="Attached" />
+          <button class="remove-attach" id="removeAttachBtn" type="button">✕</button>
+        </div>
+      </div>
+
+      <div class="bottom-dock-wrap">
+        <div class="floating-input-bar">
+          <input type="file" id="fileInput" accept="image/*" style="display:none" />
+          <button class="circle-btn" id="attachBtn" type="button" aria-label="Add attachment">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </button>
+          <textarea
+            class="prompt-input"
+            id="promptInput"
+            rows="1"
+            placeholder="Message Auralis..."
+          ></textarea>
+          <button class="circle-btn" id="sendOrMicBtn" type="button" aria-label="Send">
+            <span id="actionIconWrap"></span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -459,16 +701,16 @@ const HTML_PAGE = `<!DOCTYPE html>
   <div class="settings-backdrop" id="settingsModal">
     <div class="settings-card">
       <div class="settings-header">
-        <span>Settings</span>
+        <span>Auralis AI Settings</span>
         <button class="icon-btn" id="closeSettingsBtn" type="button" style="width:30px;height:30px;">✕</button>
       </div>
       <div class="settings-row">
         <strong>Fast Mode Routing</strong>
-        <span>gemini-3.8-flash → gemini-3.1-flash-lite</span>
+        <span>gemini-2.5-flash → gemini-1.5-flash</span>
       </div>
       <div class="settings-row">
-        <strong>Deep Think Chain</strong>
-        <span>openai/gpt-oss-120b → qwen/qwen3.8-27b → llama-3.3-70b-versatile → gemini-3.8-flash</span>
+        <strong>Deep Think Engine</strong>
+        <span>llama-3.3-70b-versatile (Fallback: gemini-2.5-flash)</span>
       </div>
       <button class="settings-action-btn" id="clearChatBtn" type="button">Start New Conversation</button>
     </div>
@@ -476,12 +718,18 @@ const HTML_PAGE = `<!DOCTYPE html>
 
   <script>
     const MIC_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>';
-    const SEND_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
+    const ARROW_UP_SVG = '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>';
+    const EMPTY_STATE_HTML = '<div class="empty-state" id="emptyState"><div class="empty-spark-badge"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L14.8 9.2L22 12L14.8 14.8L12 22L9.2 14.8L2 12L9.2 9.2L12 2Z"></path></svg></div><div class="empty-greeting">What can I help with today?</div></div>';
 
     let engineMode = localStorage.getItem('auralis_mode') || 'FAST_MODE';
     let attachedImageBase64 = null;
     let isSynthesizing = false;
-    let history = [];
+    let sessions = [];
+    try {
+      sessions = JSON.parse(localStorage.getItem('auralis_sessions_v2') || '[]');
+    } catch {}
+    let currentSessionId = sessions[0]?.id || ('sess_' + Date.now());
+    let history = sessions[0]?.messages ? [...sessions[0].messages] : [];
 
     const chatContainer = document.getElementById('chatContainer');
     const promptInput = document.getElementById('promptInput');
@@ -494,10 +742,27 @@ const HTML_PAGE = `<!DOCTYPE html>
     const attachPreviewBar = document.getElementById('attachPreviewBar');
     const attachThumbImg = document.getElementById('attachThumbImg');
     const removeAttachBtn = document.getElementById('removeAttachBtn');
-    const settingsBtn = document.getElementById('settingsBtn');
+    const menuBtn = document.getElementById('menuBtn');
+    const sidebarDrawer = document.getElementById('sidebarDrawer');
+    const drawerBackdrop = document.getElementById('drawerBackdrop');
+    const drawerNewChatBtn = document.getElementById('drawerNewChatBtn');
+    const topNewChatBtn = document.getElementById('topNewChatBtn');
+    const historyList = document.getElementById('historyList');
+    const drawerProfileBtn = document.getElementById('drawerProfileBtn');
     const settingsModal = document.getElementById('settingsModal');
     const closeSettingsBtn = document.getElementById('closeSettingsBtn');
     const clearChatBtn = document.getElementById('clearChatBtn');
+
+    function openDrawer() {
+      sidebarDrawer.classList.add('open');
+      drawerBackdrop.classList.add('open');
+    }
+    function closeDrawer() {
+      sidebarDrawer.classList.remove('open');
+      drawerBackdrop.classList.remove('open');
+    }
+    menuBtn.onclick = openDrawer;
+    drawerBackdrop.onclick = closeDrawer;
 
     function syncModeUI() {
       modeFastBtn.classList.toggle('active', engineMode === 'FAST_MODE');
@@ -508,23 +773,137 @@ const HTML_PAGE = `<!DOCTYPE html>
     modeFastBtn.onclick = () => { engineMode = 'FAST_MODE'; localStorage.setItem('auralis_mode', engineMode); syncModeUI(); };
     modeDeepBtn.onclick = () => { engineMode = 'DEEP_THINK'; localStorage.setItem('auralis_mode', engineMode); syncModeUI(); };
 
-    settingsBtn.onclick = () => settingsModal.classList.add('open');
-    closeSettingsBtn.onclick = () => settingsModal.classList.remove('open');
-    settingsModal.onclick = (e) => {
-      if (e.target === settingsModal) settingsModal.classList.remove('open');
-    };
-    clearChatBtn.onclick = () => {
-      if (!isSynthesizing) {
-        history = [];
-        chatContainer.innerHTML = '<div class="empty-state" id="emptyState">What can I help with?</div>';
+    function escapeHtml(str) {
+      return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function formatMarkdown(text) {
+      const parts = String(text || '').split(/(\`\`\`[\\s\\S]*?\`\`\`)/g);
+      return parts.map(part => {
+        if (part.startsWith('\`\`\`') && part.endsWith('\`\`\`')) {
+          const lines = part.slice(3, -3).trim().split('\\n');
+          const code = lines.length > 1 && /^[a-zA-Z0-9_-]+$/.test(lines[0].trim())
+            ? lines.slice(1).join('\\n')
+            : lines.join('\\n');
+          return '<pre><code>' + escapeHtml(code) + '</code></pre>';
+        }
+        let html = escapeHtml(part);
+        html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+        html = html.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+        return html.split('\\n\\n').map(p => '<p>' + p.replace(/\\n/g, '<br/>') + '</p>').join('');
+      }).join('');
+    }
+
+    function saveSessions() {
+      if (history.length > 0) {
+        const firstUser = history.find(m => m.role === 'user');
+        const title = (firstUser?.text || 'New Chat').slice(0, 38);
+        const idx = sessions.findIndex(s => s.id === currentSessionId);
+        const updated = { id: currentSessionId, title, updatedAt: Date.now(), messages: [...history] };
+        if (idx !== -1) sessions[idx] = updated;
+        else sessions.unshift(updated);
       }
-      settingsModal.classList.remove('open');
-    };
+      localStorage.setItem('auralis_sessions_v2', JSON.stringify(sessions.slice(0, 25)));
+      renderDrawerHistory();
+    }
+
+    function renderConversation() {
+      if (!history || history.length === 0) {
+        chatContainer.innerHTML = EMPTY_STATE_HTML;
+        return;
+      }
+      chatContainer.innerHTML = '';
+      for (const m of history) {
+        const row = document.createElement('div');
+        row.className = 'msg-row ' + (m.role === 'user' ? 'user' : 'ai');
+        if (m.role === 'user') {
+          const bubble = document.createElement('div');
+          bubble.className = 'user-bubble';
+          bubble.textContent = m.text;
+          row.appendChild(bubble);
+        } else {
+          const aiText = document.createElement('div');
+          aiText.className = 'ai-text';
+          aiText.innerHTML = formatMarkdown(m.text);
+          row.appendChild(aiText);
+        }
+        chatContainer.appendChild(row);
+      }
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function renderDrawerHistory() {
+      if (!sessions.length) {
+        historyList.innerHTML = '<div class="history-empty">No saved conversations yet</div>';
+        return;
+      }
+      historyList.innerHTML = '';
+      sessions.forEach(sess => {
+        const item = document.createElement('div');
+        item.className = 'history-item' + (sess.id === currentSessionId ? ' active' : '');
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'history-item-title';
+        titleSpan.textContent = sess.title;
+        item.appendChild(titleSpan);
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'history-delete-btn';
+        delBtn.type = 'button';
+        delBtn.textContent = '✕';
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          sessions = sessions.filter(s => s.id !== sess.id);
+          localStorage.setItem('auralis_sessions_v2', JSON.stringify(sessions));
+          if (currentSessionId === sess.id) {
+            if (sessions[0]) {
+              currentSessionId = sessions[0].id;
+              history = [...sessions[0].messages];
+            } else {
+              currentSessionId = 'sess_' + Date.now();
+              history = [];
+            }
+            renderConversation();
+          }
+          renderDrawerHistory();
+        };
+        item.appendChild(delBtn);
+
+        item.onclick = () => {
+          if (isSynthesizing) return;
+          currentSessionId = sess.id;
+          history = [...(sess.messages || [])];
+          renderConversation();
+          renderDrawerHistory();
+          closeDrawer();
+        };
+        historyList.appendChild(item);
+      });
+    }
+
+    function startNewChat() {
+      if (isSynthesizing) return;
+      saveSessions();
+      currentSessionId = 'sess_' + Date.now();
+      history = [];
+      renderConversation();
+      renderDrawerHistory();
+      closeDrawer();
+    }
+
+    drawerNewChatBtn.onclick = startNewChat;
+    topNewChatBtn.onclick = startNewChat;
+    drawerProfileBtn.onclick = () => { closeDrawer(); settingsModal.classList.add('open'); };
+    closeSettingsBtn.onclick = () => settingsModal.classList.remove('open');
+    settingsModal.onclick = (e) => { if (e.target === settingsModal) settingsModal.classList.remove('open'); };
+    clearChatBtn.onclick = () => { startNewChat(); settingsModal.classList.remove('open'); };
+
+    renderConversation();
+    renderDrawerHistory();
 
     function syncActionBtn() {
       const hasInput = promptInput.value.trim().length > 0 || Boolean(attachedImageBase64);
       sendOrMicBtn.classList.toggle('send-active', hasInput);
-      actionIconWrap.innerHTML = hasInput ? SEND_SVG : MIC_SVG;
+      actionIconWrap.innerHTML = hasInput ? ARROW_UP_SVG : MIC_SVG;
     }
     syncActionBtn();
 
@@ -588,27 +967,6 @@ const HTML_PAGE = `<!DOCTYPE html>
       attachPreviewBar.classList.remove('visible');
       syncActionBtn();
     };
-
-    function escapeHtml(str) {
-      return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-
-    function formatMarkdown(text) {
-      const parts = String(text || '').split(/(\`\`\`[\\s\\S]*?\`\`\`)/g);
-      return parts.map(part => {
-        if (part.startsWith('\`\`\`') && part.endsWith('\`\`\`')) {
-          const lines = part.slice(3, -3).trim().split('\\n');
-          const code = lines.length > 1 && /^[a-zA-Z0-9_-]+$/.test(lines[0].trim())
-            ? lines.slice(1).join('\\n')
-            : lines.join('\\n');
-          return '<pre><code>' + escapeHtml(code) + '</code></pre>';
-        }
-        let html = escapeHtml(part);
-        html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
-        html = html.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
-        return html.split('\\n\\n').map(p => '<p>' + p.replace(/\\n/g, '<br/>') + '</p>').join('');
-      }).join('');
-    }
 
     function extractDeltaFromSseJson(jsonStr) {
       try {
@@ -736,6 +1094,7 @@ const HTML_PAGE = `<!DOCTYPE html>
           aiTextEl.innerHTML = formatMarkdown(cleanReply);
           history.push({ role: 'user', text: text || 'Attached image' });
           history.push({ role: 'model', text: cleanReply });
+          saveSessions();
         } else {
           aiRow.innerHTML = '<div class="ai-text"><p>Unable to generate a response right now. Please try again.</p></div>';
         }
@@ -758,7 +1117,7 @@ const HTML_PAGE = `<!DOCTYPE html>
 </body>
 </html>`;
 
-function buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, includeThinkingConfig) {
+function buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction) {
   const contents = [];
   let lastRole = null;
   for (const h of rawHistory) {
@@ -794,14 +1153,9 @@ function buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, 
     contents.push({ role: 'user', parts: userParts });
   }
 
-  const generationConfig = includeThinkingConfig
-    ? { thinking_config: { thinking_level: 'medium' } }
-    : {};
-
   return JSON.stringify({
     systemInstruction: { parts: [{ text: systemInstruction }] },
-    contents,
-    generationConfig
+    contents
   });
 }
 
@@ -849,7 +1203,6 @@ const server = http.createServer(async (req, res) => {
     req.setTimeout(0);
     res.setTimeout(0);
 
-    // Immediately set SSE headers and start 5000ms keep-alive heartbeat
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
@@ -888,16 +1241,16 @@ const server = http.createServer(async (req, res) => {
         const modelsConfig = loadModelsConfig();
 
         const systemInstruction = engineMode === 'DEEP_THINK'
-          ? 'You are Auralis AI, an advanced reasoning assistant. Break down complex problems step-by-step, think deeply and rigorously, and provide clear, accurate, and natural answers without unnecessary boilerplate tables or filler. Never output Chinese characters.'
-          : 'You are Auralis AI, a fast, helpful, and concise assistant. Respond naturally and directly like a conversational partner without unnecessary boilerplate tables or filler. Never output Chinese characters.';
+          ? 'You are Auralis AI, an advanced deep reasoning assistant. Break down complex problems step-by-step, analyze edge cases rigorously, and provide clear, well-structured, accurate answers without filler. Never output Chinese characters.'
+          : 'You are Auralis AI, a fast, helpful, and natural conversational assistant. Respond clearly, directly, and concisely. Never output Chinese characters.';
 
-        // 1. Dynamic Deep Think Cascading Chain via Groq API (when text-only and groqKey exists)
+        // 1. Deep Think Engine ('llama-3.3-70b-versatile' via Groq API)
         if (engineMode === 'DEEP_THINK' && groqKey && !imageBase64) {
           for (const groqModel of modelsConfig.deep_think_chain) {
             if (isModelTemporarilyUnavailable(groqModel)) continue;
             try {
               const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), 3800);
+              const timer = setTimeout(() => controller.abort(), 5000);
               const groqResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -941,59 +1294,40 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        // 2. Fast Mode & Deep Think Gemini Fallback SSE Streaming
+        // 2. Gemini SSE Streaming ('gemini-2.5-flash' -> 'gemini-1.5-flash' -> 'gemini-3.1-flash-lite')
         if (geminiKey) {
-          const payloadWithThinking = buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, true);
-          const payloadStandard = buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction, false);
+          const requestBody = buildGeminiPayload(rawHistory, prompt, imageBase64, systemInstruction);
 
-          const primaryModel = engineMode === 'DEEP_THINK'
-            ? (modelsConfig.deep_think_gemini_fallback || 'gemini-3.8-flash')
-            : (modelsConfig.fast_primary || 'gemini-3.8-flash');
-          const fallbackModel = modelsConfig.fast_fallback || 'gemini-3.1-flash-lite';
-
-          const sseAttempts = [
-            {
-              model: primaryModel,
-              url: `https://generativelanguage.googleapis.com/v1beta/models/${primaryModel}:streamGenerateContent?alt=sse`,
-              body: payloadWithThinking,
-              connectTimeoutMs: 350
-            },
-            {
-              model: fallbackModel,
-              url: `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:streamGenerateContent?alt=sse`,
-              body: payloadStandard,
-              connectTimeoutMs: 15000
-            },
-            {
-              model: `${fallbackModel}-preview`,
-              url: `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}-preview:streamGenerateContent?alt=sse`,
-              body: payloadStandard,
-              connectTimeoutMs: 15000
-            }
+          const sseModels = [
+            modelsConfig.fast_primary || 'gemini-2.5-flash',
+            modelsConfig.fast_fallback || 'gemini-1.5-flash',
+            modelsConfig.fast_active_lite || 'gemini-3.1-flash-lite',
+            'gemini-3.1-flash-lite-preview'
           ];
 
-          for (const attempt of sseAttempts) {
-            if (isModelTemporarilyUnavailable(attempt.model)) continue;
+          for (const modelName of sseModels) {
+            if (isModelTemporarilyUnavailable(modelName)) continue;
             let timer = null;
             try {
               const controller = new AbortController();
-              timer = setTimeout(() => controller.abort(), attempt.connectTimeoutMs);
-              const upstreamResp = await fetch(attempt.url, {
+              timer = setTimeout(() => controller.abort(), 15000);
+              const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
+              const upstreamResp = await fetch(endpointUrl, {
                 method: 'POST',
                 headers: {
                   'x-goog-api-key': geminiKey,
                   'Content-Type': 'application/json',
                   'Accept': 'text/event-stream'
                 },
-                body: attempt.body,
+                body: requestBody,
                 signal: controller.signal
               });
               clearTimeout(timer);
               timer = null;
 
               if (!upstreamResp.ok || !upstreamResp.body) {
-                if (upstreamResp.status === 404 || upstreamResp.status === 429 || attempt.model === primaryModel) {
-                  markModelTemporarilyUnavailable(attempt.model, 600000);
+                if (upstreamResp.status === 404 || upstreamResp.status === 400) {
+                  markModelTemporarilyUnavailable(modelName, 600000);
                 }
                 upstreamResp.body?.cancel?.();
                 continue;
@@ -1022,15 +1356,12 @@ const server = http.createServer(async (req, res) => {
               }
             } catch {
               if (timer) clearTimeout(timer);
-              if (attempt.model === primaryModel) {
-                markModelTemporarilyUnavailable(attempt.model, 600000);
-              }
             }
           }
         }
 
         if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ text: 'Service temporarily unavailable. Please try again.' })}\n\n`);
+          res.write(`data: ${JSON.stringify({ text: 'Unable to reach AI service. Please try again.' })}\n\n`);
           res.write('data: [DONE]\n\n');
         }
         finishStream();

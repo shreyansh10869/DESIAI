@@ -16,41 +16,60 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 enum class AiEngineMode(val displayName: String, val badgeLabel: String) {
     FAST_MODE("Fast", "Fast"),
     DEEP_THINK("Deep Think", "Deep Think")
 }
 
+data class ChatSession(
+    val id: String = UUID.randomUUID().toString(),
+    val title: String,
+    val updatedAt: Long = System.currentTimeMillis(),
+    val messages: List<DesiMessage> = emptyList()
+)
+
 data class ModelsConfig(
-    val fastPrimary: String = "gemini-3.8-flash",
-    val fastFallback: String = "gemini-3.1-flash-lite",
-    val deepThinkChain: List<String> = listOf(
-        "openai/gpt-oss-120b",
-        "qwen/qwen3.8-27b",
-        "llama-3.3-70b-versatile"
-    ),
-    val deepThinkGeminiFallback: String = "gemini-3.8-flash"
+    val fastPrimary: String = "gemini-2.5-flash",
+    val fastFallback: String = "gemini-1.5-flash",
+    val fastActiveLite: String = "gemini-3.1-flash-lite",
+    val deepThinkChain: List<String> = listOf("llama-3.3-70b-versatile"),
+    val deepThinkGeminiFallback: String = "gemini-2.5-flash"
 )
 
 class AiEngineService(private val context: Context) {
 
     companion object {
-        const val FAST_PRIMARY_MODEL = "gemini-3.8-flash"
-        const val FAST_FALLBACK_MODEL = "gemini-3.1-flash-lite"
+        const val FAST_PRIMARY_MODEL = "gemini-2.5-flash"
+        const val FAST_FALLBACK_MODEL = "gemini-1.5-flash"
+        const val FAST_ACTIVE_LITE_MODEL = "gemini-3.1-flash-lite"
         const val DEEP_THINK_GROQ_MODEL = "llama-3.3-70b-versatile"
 
         const val GEMINI_PRIMARY_SSE_URL =
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
         const val GEMINI_FALLBACK_SSE_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse"
+        const val GEMINI_ACTIVE_LITE_SSE_URL =
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
         const val GROQ_COMPLETIONS_ENDPOINT =
             "https://api.groq.com/openai/v1/chat/completions"
 
-        private val CLOUD_PROXY_ENDPOINTS = listOf(
-            "https://ais-pre-qamaf3efozgtsy6v3vnyw3-886284290712.asia-southeast1.run.app/api/chat",
-            "https://ais-dev-qamaf3efozgtsy6v3vnyw3-886284290712.asia-southeast1.run.app/api/chat"
-        )
+        private val unavailableEndpointUntil = ConcurrentHashMap<String, Long>()
+
+        private fun isEndpointTemporarilyUnavailable(url: String): Boolean {
+            val until = unavailableEndpointUntil[url] ?: return false
+            if (System.currentTimeMillis() > until) {
+                unavailableEndpointUntil.remove(url)
+                return false
+            }
+            return true
+        }
+
+        private fun markEndpointUnavailable(url: String, ttlMs: Long = 600_000L) {
+            unavailableEndpointUntil[url] = System.currentTimeMillis() + ttlMs
+        }
     }
 
     private val prefs = context.getSharedPreferences("auralis_ai_prefs", Context.MODE_PRIVATE)
@@ -73,11 +92,8 @@ class AiEngineService(private val context: Context) {
             ModelsConfig(
                 fastPrimary = obj.optString("fast_primary", FAST_PRIMARY_MODEL).ifBlank { FAST_PRIMARY_MODEL },
                 fastFallback = obj.optString("fast_fallback", FAST_FALLBACK_MODEL).ifBlank { FAST_FALLBACK_MODEL },
-                deepThinkChain = if (chainList.isNotEmpty()) chainList else listOf(
-                    "openai/gpt-oss-120b",
-                    "qwen/qwen3.8-27b",
-                    "llama-3.3-70b-versatile"
-                ),
+                fastActiveLite = obj.optString("fast_active_lite", FAST_ACTIVE_LITE_MODEL).ifBlank { FAST_ACTIVE_LITE_MODEL },
+                deepThinkChain = if (chainList.isNotEmpty()) chainList else listOf(DEEP_THINK_GROQ_MODEL),
                 deepThinkGeminiFallback = obj.optString("deep_think_gemini_fallback", FAST_PRIMARY_MODEL)
                     .ifBlank { FAST_PRIMARY_MODEL }
             )
@@ -146,20 +162,7 @@ class AiEngineService(private val context: Context) {
 
     fun saveChatHistory(messages: List<DesiMessage>) {
         try {
-            val array = JSONArray()
-            for (msg in messages.filter { !it.isLoading && it.text.isNotBlank() }) {
-                val obj = JSONObject().apply {
-                    put("id", msg.id)
-                    put("text", sanitizeStreamChunk(msg.text))
-                    put("isUser", msg.isUser)
-                    put("timestamp", msg.timestamp)
-                    put("imageUriString", msg.imageUriString ?: "")
-                    put("tone", msg.tone.name)
-                    put("engineMode", msg.engineMode.name)
-                    if (msg.error != null) put("error", msg.error)
-                }
-                array.put(obj)
-            }
+            val array = serializeMessages(messages)
             prefs.edit().putString("chat_history_json", array.toString()).apply()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -168,56 +171,135 @@ class AiEngineService(private val context: Context) {
 
     fun loadChatHistory(): List<DesiMessage> {
         val jsonStr = prefs.getString("chat_history_json", null) ?: return emptyList()
-        val list = mutableListOf<DesiMessage>()
-        try {
-            val array = JSONArray(jsonStr)
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                val text = sanitizeStreamChunk(obj.optString("text", ""))
-                if (text.contains("Core Insight | Next Step") ||
-                    text.contains("Auralis Fast Synthesis") ||
-                    text.contains("Auralis Deep Think Synthesis") ||
-                    text.contains("Auralis Verified Sources") ||
-                    text.contains("Namaste dost!") ||
-                    text.contains("Please check your Gemini API key") ||
-                    text.contains("Please add your Gemini API key") ||
-                    text.contains("Connection interrupted. Please try")
-                ) {
-                    continue
-                }
-                val toneName = obj.optString("tone", DesiTone.DESI_FRIEND.name)
-                val tone = try { DesiTone.valueOf(toneName) } catch (e: Exception) { DesiTone.DESI_FRIEND }
-                val modeName = obj.optString("engineMode", AiEngineMode.FAST_MODE.name)
-                val engineMode = try { AiEngineMode.valueOf(modeName) } catch (e: Exception) { AiEngineMode.FAST_MODE }
-                val imageUri = obj.optString("imageUriString", "").ifBlank { null }
-                val error = obj.optString("error", "").ifBlank { null }
-
-                list.add(
-                    DesiMessage(
-                        id = obj.optString("id", java.util.UUID.randomUUID().toString()),
-                        text = text,
-                        isUser = obj.optBoolean("isUser", false),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-                        citations = emptyList(),
-                        isLoading = false,
-                        error = error,
-                        imageUriString = imageUri,
-                        tone = tone,
-                        engineMode = engineMode
-                    )
-                )
-            }
+        return try {
+            deserializeMessages(JSONArray(jsonStr))
         } catch (e: Exception) {
-            e.printStackTrace()
+            emptyList()
+        }
+    }
+
+    fun loadChatSessions(): List<ChatSession> {
+        val raw = prefs.getString("chat_sessions_v2_json", null)
+        val sessions = mutableListOf<ChatSession>()
+        if (!raw.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(raw)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("id", UUID.randomUUID().toString())
+                    val title = sanitizeStreamChunk(obj.optString("title", "Conversation")).ifBlank { "Conversation" }
+                    val updatedAt = obj.optLong("updatedAt", System.currentTimeMillis())
+                    val msgsArr = obj.optJSONArray("messages") ?: JSONArray()
+                    val msgs = deserializeMessages(msgsArr)
+                    if (msgs.isNotEmpty()) {
+                        sessions.add(ChatSession(id = id, title = title, updatedAt = updatedAt, messages = msgs))
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        if (sessions.isEmpty()) {
+            val legacy = loadChatHistory()
+            if (legacy.isNotEmpty()) {
+                val firstUserText = legacy.firstOrNull { it.isUser }?.text?.take(38) ?: "Previous Chat"
+                val migrated = ChatSession(
+                    id = UUID.randomUUID().toString(),
+                    title = firstUserText,
+                    updatedAt = System.currentTimeMillis(),
+                    messages = legacy
+                )
+                sessions.add(migrated)
+                saveChatSessions(sessions)
+            }
+        }
+        return sessions.sortedByDescending { it.updatedAt }
+    }
+
+    fun saveChatSessions(sessions: List<ChatSession>) {
+        try {
+            val arr = JSONArray()
+            for (session in sessions.take(30)) {
+                val cleanMessages = session.messages.filter { !it.isLoading && it.text.isNotBlank() }
+                if (cleanMessages.isEmpty()) continue
+                val obj = JSONObject().apply {
+                    put("id", session.id)
+                    put("title", sanitizeStreamChunk(session.title).take(48))
+                    put("updatedAt", session.updatedAt)
+                    put("messages", serializeMessages(cleanMessages))
+                }
+                arr.put(obj)
+            }
+            prefs.edit().putString("chat_sessions_v2_json", arr.toString()).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun serializeMessages(messages: List<DesiMessage>): JSONArray {
+        val array = JSONArray()
+        for (msg in messages.filter { !it.isLoading && it.text.isNotBlank() }) {
+            val obj = JSONObject().apply {
+                put("id", msg.id)
+                put("text", sanitizeStreamChunk(msg.text))
+                put("isUser", msg.isUser)
+                put("timestamp", msg.timestamp)
+                put("imageUriString", msg.imageUriString ?: "")
+                put("tone", msg.tone.name)
+                put("engineMode", msg.engineMode.name)
+                if (msg.error != null) put("error", msg.error)
+            }
+            array.put(obj)
+        }
+        return array
+    }
+
+    private fun deserializeMessages(array: JSONArray): List<DesiMessage> {
+        val list = mutableListOf<DesiMessage>()
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val text = sanitizeStreamChunk(obj.optString("text", ""))
+            if (text.isBlank() ||
+                text.contains("Core Insight | Next Step") ||
+                text.contains("Auralis Fast Synthesis") ||
+                text.contains("Auralis Deep Think Synthesis") ||
+                text.contains("Auralis Verified Sources") ||
+                text.contains("Namaste dost!") ||
+                text.contains("Please check your Gemini API key") ||
+                text.contains("Please add your Gemini API key") ||
+                text.contains("Connection interrupted. Please try") ||
+                text.contains("Service unavailable")
+            ) {
+                continue
+            }
+            val toneName = obj.optString("tone", DesiTone.DESI_FRIEND.name)
+            val tone = try { DesiTone.valueOf(toneName) } catch (e: Exception) { DesiTone.DESI_FRIEND }
+            val modeName = obj.optString("engineMode", AiEngineMode.FAST_MODE.name)
+            val engineMode = try { AiEngineMode.valueOf(modeName) } catch (e: Exception) { AiEngineMode.FAST_MODE }
+            val imageUri = obj.optString("imageUriString", "").ifBlank { null }
+            val error = obj.optString("error", "").ifBlank { null }
+
+            list.add(
+                DesiMessage(
+                    id = obj.optString("id", UUID.randomUUID().toString()),
+                    text = text,
+                    isUser = obj.optBoolean("isUser", false),
+                    timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                    citations = emptyList(),
+                    isLoading = false,
+                    error = error,
+                    imageUriString = imageUri,
+                    tone = tone,
+                    engineMode = engineMode
+                )
+            )
         }
         return list
     }
 
     private fun buildSystemPrompt(engineMode: AiEngineMode): String {
         return if (engineMode == AiEngineMode.DEEP_THINK) {
-            "You are Auralis AI, an advanced reasoning assistant. Break down complex problems step-by-step, think deeply and rigorously, and provide clear, accurate, and natural answers without unnecessary boilerplate tables or filler. Never output Chinese characters."
+            "You are Auralis AI, an advanced deep reasoning assistant. Break down complex problems step-by-step, analyze edge cases rigorously, and provide clear, well-structured, accurate answers without filler. Never output Chinese characters."
         } else {
-            "You are Auralis AI, a fast, helpful, and concise assistant. Respond naturally and directly like a conversational partner without unnecessary boilerplate tables or filler. Never output Chinese characters."
+            "You are Auralis AI, a fast, helpful, and natural conversational assistant. Respond clearly, directly, and concisely. Never output Chinese characters."
         }
     }
 
@@ -228,12 +310,13 @@ class AiEngineService(private val context: Context) {
 
     /**
      * Streams response using SSE (`?alt=sse`) and header authentication (`x-goog-api-key`):
-     * - Fast Mode Primary: 'gemini-3.8-flash'
-     *   URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse
-     * - Fast Mode Fallback: 'gemini-3.1-flash-lite'
+     * - Fast Primary: 'gemini-2.5-flash'
+     *   URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse
+     * - Fast Fallback: 'gemini-1.5-flash'
+     *   URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse
+     * - Active Lite Fallback: 'gemini-3.1-flash-lite'
      *   URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse
-     * - Deep Think Chain: sequentially attempts `deep_think_chain` (`openai/gpt-oss-120b` -> `qwen/qwen3.8-27b` -> `llama-3.3-70b-versatile`) via Groq API,
-     *   failing over within <400ms on 404/429/deprecated status, and falling back to `deep_think_gemini_fallback` ('gemini-3.8-flash' -> 'gemini-3.1-flash-lite').
+     * - Deep Think Engine: 'llama-3.3-70b-versatile' via Groq API (fallback to 'gemini-2.5-flash' with deep reasoning prompt)
      */
     suspend fun streamResponse(
         prompt: String,
@@ -256,9 +339,9 @@ class AiEngineService(private val context: Context) {
         var streamedText: String? = null
         var lastErrorMessage: String? = null
 
-        // 1. Deep Think Mode (text-only): Cascading `deep_think_chain` via Groq API
+        // 1. Deep Think Engine (Text-only): 'llama-3.3-70b-versatile' via Groq API
         if (engineMode == AiEngineMode.DEEP_THINK && encodedImage == null && groqKey.isNotBlank()) {
-            val groqRes = tryGroqDeepThinkChain(
+            val groqRes = tryGroqDeepThink(
                 apiKey = groqKey,
                 prompt = prompt,
                 systemInstruction = systemInstruction,
@@ -269,32 +352,18 @@ class AiEngineService(private val context: Context) {
                 .onFailure { lastErrorMessage = it.localizedMessage }
         }
 
-        // 2. Fast Mode (Text & Multimodal Images) or Deep Think Gemini Fallback -> Gemini SSE endpoints
+        // 2. Fast Mode ('gemini-2.5-flash' -> 'gemini-1.5-flash' -> 'gemini-3.1-flash-lite') or Deep Think Fallback
         if (streamedText.isNullOrBlank() && geminiKey.isNotBlank()) {
             val geminiRes = tryGeminiSseEndpoints(
                 apiKey = geminiKey,
                 prompt = prompt,
                 encodedImage = encodedImage,
-                engineMode = engineMode,
                 systemInstruction = systemInstruction,
                 history = conversationHistory,
                 onToken = onToken
             )
             geminiRes.onSuccess { streamedText = it }
                 .onFailure { lastErrorMessage = it.localizedMessage }
-        }
-
-        // 3. Seamless Cloud SSE Proxy fallback (handles ambient AQ.* keys on external devices)
-        if (streamedText.isNullOrBlank()) {
-            val proxyRes = tryCloudSseProxy(
-                prompt = prompt,
-                encodedImage = encodedImage,
-                engineMode = engineMode,
-                history = conversationHistory,
-                onToken = onToken
-            )
-            proxyRes.onSuccess { streamedText = it }
-                .onFailure { if (lastErrorMessage == null) lastErrorMessage = it.localizedMessage }
         }
 
         val finalResponse = streamedText?.let { sanitizeStreamChunk(it).trim() }
@@ -308,58 +377,43 @@ class AiEngineService(private val context: Context) {
         val cleanError = lastErrorMessage
             ?.let { sanitizeStreamChunk(it).lines().firstOrNull()?.take(120) }
             ?.takeIf { it.isNotBlank() }
-            ?: "Unable to reach AI service. Please check your internet connection."
+            ?: "Unable to reach AI service. Please check your connection and try again."
         Result.failure(Exception(cleanError))
     }
 
     /**
-     * Streams SSE from Gemini endpoints using 'x-goog-api-key' header and thinking_config.thinking_level = "medium".
+     * Streams SSE from verified Google Gemini models using 'x-goog-api-key' header authentication:
+     * 1. 'gemini-2.5-flash' (https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse)
+     * 2. 'gemini-1.5-flash' (https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse)
+     * 3. 'gemini-3.1-flash-lite' (seamless fallback for project keys restricted to 3.x models)
      */
     private suspend fun tryGeminiSseEndpoints(
         apiKey: String,
         prompt: String,
         encodedImage: EncodedImagePayload?,
-        engineMode: AiEngineMode,
         systemInstruction: String,
         history: List<DesiMessage>,
         onToken: suspend (String) -> Unit
     ): Result<String> {
-        val payloadWithThinking = buildGeminiRequestPayload(
+        val requestBody = buildGeminiRequestPayload(
             prompt = prompt,
             encodedImage = encodedImage,
             systemInstruction = systemInstruction,
-            history = history,
-            includeThinkingConfig = true
-        )
-        val payloadStandard = buildGeminiRequestPayload(
-            prompt = prompt,
-            encodedImage = encodedImage,
-            systemInstruction = systemInstruction,
-            history = history,
-            includeThinkingConfig = false
+            history = history
         )
 
-        val primaryModel = if (engineMode == AiEngineMode.DEEP_THINK) {
-            modelsConfig.deepThinkGeminiFallback
-        } else {
-            modelsConfig.fastPrimary
-        }
-        val fallbackModel = modelsConfig.fastFallback
-
-        val primaryUrl =
-            "https://generativelanguage.googleapis.com/v1beta/models/$primaryModel:streamGenerateContent?alt=sse"
-        val fallbackUrl =
-            "https://generativelanguage.googleapis.com/v1beta/models/$fallbackModel:streamGenerateContent?alt=sse"
-
-        val attempts = listOf(
-            Triple(primaryUrl, payloadWithThinking, 1200),
-            Triple(fallbackUrl, payloadStandard, 15000),
-            Triple("https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}-preview:streamGenerateContent?alt=sse", payloadStandard, 15000)
+        val candidateEndpoints = listOf(
+            GEMINI_PRIMARY_SSE_URL,
+            GEMINI_FALLBACK_SSE_URL,
+            GEMINI_ACTIVE_LITE_SSE_URL,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:streamGenerateContent?alt=sse"
         )
 
         var lastError = "Unable to connect to Gemini stream."
 
-        for ((endpointUrl, requestBody, timeoutMs) in attempts) {
+        for (endpointUrl in candidateEndpoints) {
+            if (isEndpointTemporarilyUnavailable(endpointUrl)) continue
+
             var conn: HttpURLConnection? = null
             try {
                 conn = (URL(endpointUrl).openConnection() as HttpURLConnection).apply {
@@ -369,8 +423,8 @@ class AiEngineService(private val context: Context) {
                     setRequestProperty("Accept", "text/event-stream")
                     setRequestProperty("Cache-Control", "no-cache")
                     doOutput = true
-                    connectTimeout = timeoutMs
-                    readTimeout = timeoutMs
+                    connectTimeout = 8000
+                    readTimeout = 20000
                 }
 
                 OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
@@ -383,6 +437,9 @@ class AiEngineService(private val context: Context) {
                     try {
                         conn.errorStream?.use { it.readBytes() }
                     } catch (_: Exception) {
+                    }
+                    if (code == 404 || code == 400) {
+                        markEndpointUnavailable(endpointUrl)
                     }
                     lastError = "HTTP $code"
                     continue
@@ -444,119 +501,10 @@ class AiEngineService(private val context: Context) {
     }
 
     /**
-     * Streams SSE from the AI Studio Cloud Run server proxy (`server.mjs`) if direct device calls fail.
+     * Deep Think Engine: 'llama-3.3-70b-versatile' via Groq API
+     * (https://api.groq.com/openai/v1/chat/completions)
      */
-    private suspend fun tryCloudSseProxy(
-        prompt: String,
-        encodedImage: EncodedImagePayload?,
-        engineMode: AiEngineMode,
-        history: List<DesiMessage>,
-        onToken: suspend (String) -> Unit
-    ): Result<String> {
-        val historyJson = JSONArray()
-        for (msg in history.filter { !it.isLoading && it.text.isNotBlank() && it.error == null }.takeLast(8)) {
-            historyJson.put(JSONObject().apply {
-                put("role", if (msg.isUser) "user" else "model")
-                put("text", sanitizeStreamChunk(msg.text))
-            })
-        }
-
-        val payloadJson = JSONObject().apply {
-            put("prompt", prompt)
-            put("engineMode", engineMode.name)
-            put("history", historyJson)
-            if (encodedImage != null) {
-                put("imageBase64", "data:${encodedImage.mimeType};base64,${encodedImage.base64Data}")
-            }
-        }.toString()
-
-        var lastErr = "Service unavailable."
-        for (proxyUrl in CLOUD_PROXY_ENDPOINTS) {
-            var conn: HttpURLConnection? = null
-            try {
-                conn = (URL(proxyUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json")
-                    setRequestProperty("Accept", "text/event-stream")
-                    doOutput = true
-                    connectTimeout = 8000
-                    readTimeout = 25000
-                }
-
-                OutputStreamWriter(conn.outputStream, "UTF-8").use { writer ->
-                    writer.write(payloadJson)
-                    writer.flush()
-                }
-
-                val code = conn.responseCode
-                if (code !in 200..299) {
-                    try {
-                        conn.errorStream?.use { it.readBytes() }
-                    } catch (_: Exception) {
-                    }
-                    continue
-                }
-
-                val accumulated = StringBuilder()
-                BufferedReader(InputStreamReader(conn.inputStream, "UTF-8")).use { reader ->
-                    var line: String? = reader.readLine()
-                    while (line != null) {
-                        val trimmed = line.trim()
-                        if (trimmed.startsWith(":")) {
-                            line = reader.readLine()
-                            continue
-                        }
-                        if (trimmed.startsWith("data:")) {
-                            val jsonStr = trimmed.removePrefix("data:").trim()
-                            if (jsonStr.isNotEmpty() && jsonStr != "[DONE]") {
-                                val delta = extractCandidateTextFromJson(jsonStr)
-                                if (delta.isNotEmpty()) {
-                                    accumulated.append(sanitizeStreamChunk(delta))
-                                    val snapshot = accumulated.toString()
-                                    withContext(Dispatchers.Main) {
-                                        onToken(snapshot)
-                                    }
-                                }
-                            }
-                        } else if (trimmed.startsWith("{") && trimmed.contains("\"reply\"")) {
-                            val obj = JSONObject(trimmed)
-                            val rep = sanitizeStreamChunk(obj.optString("reply", "")).trim()
-                            if (rep.isNotEmpty()) {
-                                accumulated.append(rep)
-                                withContext(Dispatchers.Main) {
-                                    onToken(rep)
-                                }
-                            }
-                        }
-                        line = reader.readLine()
-                    }
-                }
-
-                val resultText = accumulated.toString().trim()
-                if (resultText.isNotBlank()) {
-                    return Result.success(resultText)
-                }
-            } catch (e: Exception) {
-                lastErr = e.localizedMessage ?: "Network error."
-            } finally {
-                try {
-                    conn?.disconnect()
-                } catch (_: Exception) {
-                }
-            }
-        }
-        return Result.failure(Exception(lastErr))
-    }
-
-    /**
-     * Deep Think Cascading Engine:
-     * Sequentially attempts models in `modelsConfig.deepThinkChain`:
-     *   1. "openai/gpt-oss-120b"
-     *   2. "qwen/qwen3.8-27b"
-     *   3. "llama-3.3-70b-versatile"
-     * via Groq API (`https://api.groq.com/openai/v1/chat/completions`), failing over within <400ms on 404/429/deprecated.
-     */
-    private suspend fun tryGroqDeepThinkChain(
+    private suspend fun tryGroqDeepThink(
         apiKey: String,
         prompt: String,
         systemInstruction: String,
@@ -564,7 +512,7 @@ class AiEngineService(private val context: Context) {
         onToken: suspend (String) -> Unit
     ): Result<String> {
         val messagesPayload = buildOpenAiMessages(systemInstruction, history, prompt)
-        var lastError = "Deep Think Groq chain unavailable."
+        var lastError = "Groq Deep Think unavailable."
 
         for (candidateModel in modelsConfig.deepThinkChain) {
             var conn: HttpURLConnection? = null
@@ -575,7 +523,7 @@ class AiEngineService(private val context: Context) {
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty("Authorization", "Bearer $apiKey")
                     doOutput = true
-                    connectTimeout = 3500
+                    connectTimeout = 5000
                     readTimeout = 15000
                 }
 
@@ -597,7 +545,7 @@ class AiEngineService(private val context: Context) {
                         conn.errorStream?.use { it.readBytes() }
                     } catch (_: Exception) {
                     }
-                    lastError = "Groq ($candidateModel) HTTP $code"
+                    lastError = "Groq HTTP $code"
                     continue
                 }
 
@@ -615,7 +563,7 @@ class AiEngineService(private val context: Context) {
                     return Result.success(sanitized)
                 }
             } catch (e: Exception) {
-                lastError = e.localizedMessage ?: "Network error contacting Groq ($candidateModel)."
+                lastError = e.localizedMessage ?: "Network error contacting Groq."
             } finally {
                 try {
                     conn?.disconnect()
@@ -630,8 +578,7 @@ class AiEngineService(private val context: Context) {
         prompt: String,
         encodedImage: EncodedImagePayload?,
         systemInstruction: String,
-        history: List<DesiMessage>,
-        includeThinkingConfig: Boolean
+        history: List<DesiMessage>
     ): String {
         val contentsArray = JSONArray()
         val validHistory = history
@@ -683,20 +630,11 @@ class AiEngineService(private val context: Context) {
             })
         }
 
-        val generationConfigObj = JSONObject()
-        if (includeThinkingConfig) {
-            generationConfigObj.put(
-                "thinking_config",
-                JSONObject().put("thinking_level", "medium")
-            )
-        }
-
         return JSONObject().apply {
             put("systemInstruction", JSONObject().apply {
                 put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
             })
             put("contents", contentsArray)
-            put("generationConfig", generationConfigObj)
         }.toString()
     }
 

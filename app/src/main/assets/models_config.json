@@ -1,10 +1,9 @@
 {
-  "fast_primary": "gemini-3.8-flash",
-  "fast_fallback": "gemini-3.1-flash-lite",
+  "fast_primary": "gemini-2.5-flash",
+  "fast_fallback": "gemini-1.5-flash",
+  "fast_active_lite": "gemini-3.1-flash-lite",
   "deep_think_chain": [
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.8-27b",
     "llama-3.3-70b-versatile"
   ],
-  "deep_think_gemini_fallback": "gemini-3.8-flash"
+  "deep_think_gemini_fallback": "gemini-2.5-flash"
 }
